@@ -50,7 +50,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #
 .chevron { color: #D1D5DB; font-size: 18px; }
 .empty { text-align: center; padding: 60px 20px; color: #9CA3AF; }
 .empty-icon { font-size: 48px; margin-bottom: 12px; }
-.fab { position: fixed; bottom: 24px; right: 24px; width: 56px; height: 56px; border-radius: 50%; background: #1a1a2e; color: #fff; font-size: 28px; border: none; cursor: pointer; box-shadow: 0 4px 16px rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center; z-index: 200; user-select: none; -webkit-user-select: none; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+.fab { position: fixed; bottom: 80px; right: 20px; width: 70px; height: 70px; border-radius: 50%; background: #1a1a2e; color: #fff; font-size: 32px; border: none; cursor: pointer; box-shadow: 0 4px 16px rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center; z-index: 9999; user-select: none; -webkit-user-select: none; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
 .panel { position: fixed; inset: 0; background: #F5F5F5; z-index: 300; overflow-y: auto; display: none; }
 .panel.open { display: block; }
 .panel-header { background: #1a1a2e; color: #fff; padding: 14px 16px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; }
