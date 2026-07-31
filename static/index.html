@@ -1,1 +1,192 @@
-a
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>黑膠庫存管理</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #F5F5F5; max-width: 480px; margin: 0 auto; min-height: 100vh; }
+.header { background: #1a1a2e; color: #fff; padding: 14px 16px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 100; }
+.header h1 { font-size: 17px; font-weight: 700; }
+.header-actions { display: flex; gap: 8px; align-items: center; }
+.icon-btn { background: rgba(255,255,255,0.15); border: none; color: #fff; padding: 6px 10px; border-radius: 8px; cursor: pointer; font-size: 15px; }
+.filter-bar { background: #fff; padding: 10px 12px; border-bottom: 1px solid #eee; }
+.search-input { width: 100%; padding: 8px 12px; border: 1.5px solid #E5E7EB; border-radius: 10px; font-size: 14px; outline: none; }
+.grade-filters { display: flex; gap: 6px; margin-top: 8px; }
+.grade-filter-btn { padding: 4px 14px; border-radius: 20px; border: none; font-size: 13px; font-weight: 600; cursor: pointer; background: #F3F4F6; color: #374151; }
+.grade-filter-btn.active { background: #1a1a2e; color: #fff; }
+.count-bar { padding: 6px 16px; font-size: 13px; color: #6B7280; }
+.record-list { padding-bottom: 100px; }
+.record-row { display: flex; align-items: center; gap: 12px; padding: 12px 16px; background: #fff; border-bottom: 1px solid #F3F4F6; cursor: pointer; }
+.record-row:active { background: #F9FAFB; }
+.thumb { width: 56px; height: 56px; border-radius: 8px; object-fit: cover; flex-shrink: 0; background: #F3F4F6; display: flex; align-items: center; justify-content: center; font-size: 24px; overflow: hidden; }
+.thumb img { width: 100%; height: 100%; object-fit: cover; }
+.record-info { flex: 1; min-width: 0; }
+.record-artist { font-weight: 700; font-size: 15px; color: #1F2937; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.record-album { font-size: 13px; color: #6B7280; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.record-tags { display: flex; gap: 5px; margin-top: 5px; flex-wrap: wrap; }
+.tag { padding: 1px 7px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+.tag-A { background: #FEF3C7; color: #D97706; }
+.tag-B { background: #DBEAFE; color: #1D4ED8; }
+.tag-C { background: #F3F4F6; color: #6B7280; }
+.tag-fmt { background: #F3F4F6; color: #6B7280; }
+.chevron { color: #D1D5DB; font-size: 18px; }
+.empty { text-align: center; padding: 60px 20px; color: #9CA3AF; }
+.empty .emoji { font-size: 48px; margin-bottom: 12px; }
+.fab { position: fixed; bottom: 24px; right: 24px; width: 56px; height: 56px; border-radius: 50%; background: #1a1a2e; color: #fff; font-size: 28px; border: none; cursor: pointer; box-shadow: 0 4px 16px rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center; z-index: 200; }
+.panel { position: fixed; inset: 0; background: #F5F5F5; z-index: 300; overflow-y: auto; display: none; }
+.panel.open { display: block; }
+.panel-header { background: #1a1a2e; color: #fff; padding: 14px 16px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; }
+.panel-header h2 { font-size: 17px; font-weight: 700; }
+.back-btn { background: none; border: none; color: #60A5FA; font-size: 15px; cursor: pointer; padding: 4px 0; }
+.danger-btn { background: none; border: none; color: #F87171; font-size: 15px; cursor: pointer; padding: 4px 0; }
+.form-body { padding: 16px; }
+.photo-zone { width: 100%; height: 180px; background: #fff; border: 2px dashed #D1D5DB; border-radius: 16px; display: flex; align-items: center; justify-content: center; margin-bottom: 12px; overflow: hidden; }
+.photo-placeholder { text-align: center; color: #9CA3AF; }
+.upload-btn-label { display: block; width: 100%; padding: 12px; background: #F3F4F6; color: #374151; border: 1.5px solid #D1D5DB; border-radius: 10px; font-size: 15px; font-weight: 600; cursor: pointer; text-align: center; margin-bottom: 14px; }
+.batch-btn-label { display: block; width: 100%; padding: 12px; background: #EDE9FE; color: #7C3AED; border: 1.5px solid #7C3AED; border-radius: 10px; font-size: 15px; font-weight: 600; cursor: pointer; text-align: center; margin-bottom: 14px; }
+.ai-bar { padding: 10px 14px; border-radius: 10px; font-size: 13px; margin-bottom: 12px; text-align: center; font-weight: 600; }
+.ai-bar.loading { background: #FEF3C7; color: #92400E; }
+.ai-bar.done { background: #D1FAE5; color: #065F46; }
+.ai-bar.error { background: #FEE2E2; color: #991B1B; }
+.progress-bar-wrap { background: #E5E7EB; border-radius: 10px; height: 8px; margin: 8px 0 4px; }
+.progress-bar { background: #7C3AED; height: 8px; border-radius: 10px; transition: width 0.3s; }
+.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
+.field { margin-bottom: 10px; }
+.field label { display: block; font-size: 12px; font-weight: 700; color: #374151; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.5px; }
+.field input, .field select, .field textarea { width: 100%; padding: 9px 11px; border: 1.5px solid #E5E7EB; border-radius: 8px; font-size: 14px; outline: none; background: #fff; font-family: inherit; }
+.field textarea { resize: vertical; }
+.grade-btns { display: flex; gap: 8px; }
+.grade-btn { flex: 1; padding: 10px 4px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 700; text-align: center; border: 2px solid transparent; }
+.grade-btn.A { border-color: #F59E0B; }
+.grade-btn.A.active { background: #F59E0B; color: #fff; }
+.grade-btn.A:not(.active) { background: #FEF3C7; color: #D97706; }
+.grade-btn.B { border-color: #3B82F6; }
+.grade-btn.B.active { background: #3B82F6; color: #fff; }
+.grade-btn.B:not(.active) { background: #DBEAFE; color: #1D4ED8; }
+.grade-btn.C { border-color: #9CA3AF; }
+.grade-btn.C.active { background: #9CA3AF; color: #fff; }
+.grade-btn.C:not(.active) { background: #F3F4F6; color: #6B7280; }
+.save-btn { width: 100%; padding: 14px; background: #1a1a2e; color: #fff; border: none; border-radius: 12px; font-size: 16px; font-weight: 700; cursor: pointer; margin-top: 8px; }
+.save-btn:disabled { opacity: 0.5; }
+.detail-body { padding: 16px; padding-bottom: 40px; }
+.detail-img { width: 100%; border-radius: 12px; margin-bottom: 14px; max-height: 240px; object-fit: cover; }
+.detail-card { background: #fff; border-radius: 12px; padding: 14px; margin-bottom: 10px; }
+.detail-artist { font-size: 22px; font-weight: 800; color: #1F2937; }
+.detail-album { font-size: 16px; color: #6B7280; margin-top: 4px; }
+.detail-tags { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.section-label { font-size: 11px; font-weight: 700; color: #9CA3AF; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }
+.detail-text { font-size: 14px; color: #374151; line-height: 1.6; }
+.stats-body { padding: 16px; }
+.stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px; }
+.stat-card { border-radius: 12px; padding: 16px; text-align: center; }
+.stat-num { font-size: 32px; font-weight: 800; }
+.stat-label { font-size: 13px; margin-top: 4px; }
+.export-btn { width: 100%; padding: 14px; background: #065F46; color: #fff; border: none; border-radius: 12px; font-size: 15px; font-weight: 700; cursor: pointer; margin-bottom: 16px; }
+.toast { position: fixed; bottom: 90px; left: 50%; transform: translateX(-50%); padding: 10px 20px; border-radius: 20px; font-size: 14px; font-weight: 600; box-shadow: 0 4px 12px rgba(0,0,0,0.15); z-index: 9999; white-space: nowrap; }
+.toast.success { background: #D1FAE5; color: #065F46; }
+.toast.error { background: #FEE2E2; color: #991B1B; }
+.batch-queue { background: #fff; border-radius: 12px; padding: 12px; margin-bottom: 12px; }
+.batch-item { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid #F3F4F6; font-size: 13px; }
+.batch-item:last-child { border-bottom: none; }
+.batch-status { font-size: 16px; width: 20px; text-align: center; }
+</style>
+</head>
+<body>
+<div id="main-view">
+  <div class="header">
+    <h1>🎵 黑膠庫存管理</h1>
+    <div class="header-actions">
+      <button class="icon-btn" onclick="showStats()">📊</button>
+    </div>
+  </div>
+  <div class="filter-bar">
+    <input class="search-input" id="search-input" placeholder="搜尋藝人 / 專輯 / 廠牌..." oninput="renderList()">
+    <div class="grade-filters">
+      <button class="grade-filter-btn active" onclick="setGradeFilter(this,'all')">全部</button>
+      <button class="grade-filter-btn" onclick="setGradeFilter(this,'A')">A級</button>
+      <button class="grade-filter-btn" onclick="setGradeFilter(this,'B')">B級</button>
+      <button class="grade-filter-btn" onclick="setGradeFilter(this,'C')">C級</button>
+    </div>
+  </div>
+  <div class="count-bar" id="count-bar">載入中...</div>
+  <div class="record-list" id="record-list"></div>
+  <button class="fab" onclick="showAdd()">＋</button>
+</div>
+<div class="panel" id="add-panel">
+  <div class="panel-header">
+    <button class="back-btn" onclick="closeAdd()">← 返回</button>
+    <h2>新增唱片</h2>
+    <div style="width:48px"></div>
+  </div>
+  <div class="form-body">
+    <div class="photo-zone" id="photo-zone">
+      <div class="photo-placeholder" id="photo-placeholder">
+        <div style="font-size:40px">📀</div>
+        <div style="margin-top:8px;font-size:14px">單張拍照辨識</div>
+      </div>
+      <img id="preview-img" style="display:none;width:100%;height:100%;object-fit:cover;" alt="preview">
+    </div>
+    <label class="upload-btn-label" for="file-input">📷 單張拍照 / 選取（AI辨識）</label>
+    <input type="file" id="file-input" accept="image/*" style="display:none" onchange="handleFileChange(this)">
+    <label class="batch-btn-label" for="batch-input">📦 批量上傳多張（自動排隊辨識）</label>
+    <input type="file" id="batch-input" accept="image/*" multiple style="display:none" onchange="handleBatchChange(this)">
+    <div class="ai-bar" id="ai-bar" style="display:none"></div>
+    <div id="batch-queue-wrap" style="display:none">
+      <div class="batch-queue" id="batch-queue"></div>
+    </div>
+    <div class="form-grid">
+      <div class="field"><label>藝人 / 樂團</label><input id="f-artist" placeholder="藝人名稱"></div>
+      <div class="field"><label>專輯名稱</label><input id="f-album" placeholder="專輯名稱"></div>
+      <div class="field"><label>年份</label><input id="f-year" placeholder="例：1976"></div>
+      <div class="field"><label>唱片公司</label><input id="f-label" placeholder="廠牌"></div>
+      <div class="field"><label>音樂類型</label><input id="f-genre" placeholder="例：Jazz"></div>
+      <div class="field"><label>估計市場價值</label><input id="f-value" placeholder="例：NT$300-500"></div>
+    </div>
+    <div class="field">
+      <label>格式</label>
+      <select id="f-format">
+        <option>LP (33轉)</option>
+        <option>SP/78轉蟲膠</option>
+        <option>EP (45轉)</option>
+        <option>其他</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>等級分類</label>
+      <div class="grade-btns">
+        <button class="grade-btn A" onclick="setGrade('A')">A級<br><span style="font-size:10px;font-weight:400">稀有高價</span></button>
+        <button class="grade-btn B active" onclick="setGrade('B')">B級<br><span style="font-size:10px;font-weight:400">一般流通</span></button>
+        <button class="grade-btn C" onclick="setGrade('C')">C級<br><span style="font-size:10px;font-weight:400">散貨出清</span></button>
+      </div>
+    </div>
+    <div class="field"><label>品相說明</label><input id="f-condition" placeholder="例：封面八成新，黑膠無刮傷"></div>
+    <div class="field"><label>曲目</label><textarea
+ <script>
+let records=[];let currentGrade='all';let currentRecord=null;let currentGradeSelected='B';let uploadedImageUrl='';let batchQueue=[];let batchProcessing=false;
+async function fetchRecords(){try{const res=await fetch('/api/records');records=await res.json();renderList();}catch(e){showToast('載入失敗','error');}}
+function getFiltered(){const q=document.getElementById('search-input').value.toLowerCase();return records.filter(r=>{if(currentGrade!=='all'&&r.grade!==currentGrade)return false;if(q&&!`${r.artist} ${r.album} ${r.label}`.toLowerCase().includes(q))return false;return true;});}
+function renderList(){const filtered=getFiltered();document.getElementById('count-bar').textContent=`共 ${filtered.length} 張${currentGrade!=='all'||document.getElementById('search-input').value?'（已篩選）':''}`;const el=document.getElementById('record-list');if(!filtered.length){el.innerHTML=`<div class="empty"><div class="emoji">${records.length===0?'📦':'🔍'}</div><div>${records.length===0?'還沒有任何庫存<br>點擊下方「＋」開始新增':'找不到符合的唱片'}</div></div>`;return;}el.innerHTML=filtered.map(r=>`<div class="record-row" onclick="showDetail('${r.id}')"><div class="thumb">${r.image_url?`<img src="${r.image_url}" onerror="this.parentElement.textContent='🎵'">`:' 🎵'}</div><div class="record-info"><div class="record-artist">${r.artist||'未知藝人'}</div><div class="record-album">${r.album||'未知專輯'}</div><div class="record-tags"><span class="tag tag-${r.grade}">${{A:'A級',B:'B級',C:'C級'}[r.grade]||r.grade}</span><span class="tag tag-fmt">${r.format?.replace(' (33轉)','').replace('/78轉蟲膠','')||''}</span>${r.year?`<span class="tag tag-fmt">${r.year}</span>`:''}</div></div><div class="chevron">›</div></div>`).join('');}
+function setGradeFilter(btn,grade){document.querySelectorAll('.grade-filter-btn').forEach(b=>b.classList.remove('active'));btn.classList.add('active');currentGrade=grade;renderList();}
+function showAdd(){resetForm();document.getElementById('add-panel').classList.add('open');}
+function closeAdd(){document.getElementById('add-panel').classList.remove('open');}
+function resetForm(){['artist','album','year','label','genre','value','condition','tracks','notes'].forEach(k=>document.getElementById('f-'+k).value='');document.getElementById('f-format').value='LP (33轉)';document.getElementById('preview-img').style.display='none';document.getElementById('photo-placeholder').style.display='block';document.getElementById('ai-bar').style.display='none';document.getElementById('file-input').value='';document.getElementById('batch-input').value='';document.getElementById('batch-queue-wrap').style.display='none';document.getElementById('batch-queue').innerHTML='';uploadedImageUrl='';batchQueue=[];setGrade('B');}
+function setGrade(g){currentGradeSelected=g;document.querySelectorAll('.grade-btn').forEach(b=>b.classList.remove('active'));document.querySelector(`.grade-btn.${g}`).classList.add('active');}
+async function handleFileChange(input){const file=input.files[0];if(!file)return;const reader=new FileReader();reader.onload=e=>{document.getElementById('preview-img').src=e.target.result;document.getElementById('preview-img').style.display='block';document.getElementById('photo-placeholder').style.display='none';};reader.readAsDataURL(file);showAiBar('loading','⏫ 上傳圖片中...');const fd=new FormData();fd.append('file',file);try{const res=await fetch('/api/upload',{method:'POST',body:fd});const data=await res.json();uploadedImageUrl=data.url;showAiBar('loading','🤖 AI 辨識中...');const aiRes=await fetch('/api/ai-recognize',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({image_url:uploadedImageUrl})});const info=await aiRes.json();fillForm(info);showAiBar('done','✅ AI辨識完成，請確認並補充資料');}catch(e){showAiBar('error','⚠️ 辨識失敗，請手動輸入');}}
+function fillForm(info){if(info.artist)document.getElementById('f-artist').value=info.artist;if(info.album)document.getElementById('f-album').value=info.album;if(info.year)document.getElementById('f-year').value=info.year;if(info.label)document.getElementById('f-label').value=info.label;if(info.genre)document.getElementById('f-genre').value=info.genre;if(info.condition)document.getElementById('f-condition').value=info.condition;if(info.tracks)document.getElementById('f-tracks').value=info.tracks;if(info.notes)document.getElementById('f-notes').value=info.notes;if(info.estimated_value)document.getElementById('f-value').value=info.estimated_value;if(info.suggested_grade)setGrade(info.suggested_grade);if(info.format?.includes('SP')||info.format?.includes('78'))document.getElementById('f-format').value='SP/78轉蟲膠';else if(info.format?.includes('EP'))document.getElementById('f-format').value='EP (45轉)';}
+async function handleBatchChange(input){const files=Array.from(input.files);if(!files.length)return;batchQueue=files.map((f,i)=>({file:f,status:'待處理',name:f.name,index:i}));document.getElementById('batch-queue-wrap').style.display='block';renderBatchQueue();await processBatchQueue();}
+function renderBatchQueue(){const el=document.getElementById('batch-queue');const icons={待處理:'⏳',處理中:'🔄',完成:'✅',失敗:'❌'};el.innerHTML=`<div style="font-size:12px;font-weight:700;color:#6B7280;margin-bottom:8px">批量處理進度 ${batchQueue.filter(i=>i.status==='完成').length}/${batchQueue.length}</div>`+batchQueue.map(item=>`<div class="batch-item"><span class="batch-status">${icons[item.status]||'⏳'}</span><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${item.name}</span><span style="color:#9CA3AF;font-size:11px">${item.status}</span></div>`).join('');const done=batchQueue.filter(i=>i.status==='完成').length;const pct=batchQueue.length?Math.round(done/batchQueue.length*100):0;el.innerHTML+=`<div class="progress-bar-wrap"><div class="progress-bar" style="width:${pct}%"></div></div><div style="text-align:right;font-size:12px;color:#6B7280">${pct}%</div>`;}
+async function processBatchQueue(){if(batchProcessing)return;batchProcessing=true;for(let i=0;i<batchQueue.length;i++){batchQueue[i].status='處理中';renderBatchQueue();try{const fd=new FormData();fd.append('file',batchQueue[i].file);const upRes=await fetch('/api/upload',{method:'POST',body:fd});const upData=await upRes.json();const aiRes=await fetch('/api/ai-recognize',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({image_url:upData.url})});const info=await aiRes.json();await fetch('/api/records',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({artist:info.artist||'',album:info.album||'',year:info.year||'',label:info.label||'',genre:info.genre||'',format:info.format?.includes('SP')||info.format?.includes('78')?'SP/78轉蟲膠':info.format?.includes('EP')?'EP (45轉)':'LP (33轉)',grade:info.suggested_grade||'B',condition:info.condition||'',tracks:info.tracks||'',notes:info.notes||'',estimated_value:info.estimated_value||'',image_url:upData.url})});batchQueue[i].status='完成';}catch(e){batchQueue[i].status='失敗';}renderBatchQueue();}batchProcessing=false;await fetchRecords();showToast(`✅ 批量完成！共 ${batchQueue.filter(i=>i.status==='完成').length} 張已存入庫存`);}
+function showAiBar(type,msg){const el=document.getElementById('ai-bar');el.className=`ai-bar ${type}`;el.textContent=msg;el.style.display='block';}
+async function saveRecord(){const artist=document.getElementById('f-artist').value;const album=document.getElementById('f-album').value;if(!artist&&!album){showToast('請至少填寫藝人或專輯名稱','error');return;}document.getElementById('save-btn').disabled=true;try{await fetch('/api/records',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({artist,album,year:document.getElementById('f-year').value,label:document.getElementById('f-label').value,genre:document.getElementById('f-genre').value,format:document.getElementById('f-format').value,grade:currentGradeSelected,condition:document.getElementById('f-condition').value,tracks:document.getElementById('f-tracks').value,notes:document.getElementById('f-notes').value,estimated_value:document.getElementById('f-value').value,image_url:uploadedImageUrl})});await fetchRecords();showToast('✅ 已新增 '+(artist||album));closeAdd();}catch(e){showToast('儲存失敗','error');}document.getElementById('save-btn').disabled=false;}
+function showDetail(id){currentRecord=records.find(r=>r.id===id);if(!currentRecord)return;const r=currentRecord;const gc={A:'#D97706',B:'#1D4ED8',C:'#6B7280'};const gb={A:'#FEF3C7',B:'#DBEAFE',C:'#F3F4F6'};const gl={A:'A級精品',B:'B級流通',C:'C級散貨'};document.getElementById('detail-body').innerHTML=`${r.image_url?`<img class="detail-img" src="${r.image_url}">`:''}<div class="detail-card"><div class="detail-artist">${r.artist||'未知藝人'}</div><div class="detail-album">${r.album||'未知專輯'}</div><div class="detail-tags"><span class="tag" style="background:${gb[r.grade]};color:${gc[r.grade]};font-size:13px;padding:3px 10px">${gl[r.grade]}</span><span class="tag tag-fmt" style="font-size:13px;padding:3px 10px">${r.format||''}</span>${r.year?`<span class="tag tag-fmt" style="font-size:13px;padding:3px 10px">${r.year}</span>`:''}${r.label?`<span class="tag tag-fmt" style="font-size:13px;padding:3px 10px">${r.label}</span>`:''}</div></div><div class="detail-card"><div class="section-label">快速改等級</div><div class="grade-btns" style="margin-top:8px"><button class="grade-btn A ${r.grade==='A'?'active':''}" onclick="quickUpdateGrade('A')">A級</button><button class="grade-btn B ${r.grade==='B'?'active':''}" onclick="quickUpdateGrade('B')">B級</button><button class="grade-btn C ${r.grade==='C'?'active':''}" onclick="quickUpdateGrade('C')">C級</button></div></div>${[['音樂類型',r.genre],['品相',r.condition],['估計市場價值',r.estimated_value],['曲目',r.tracks],['備註',r.notes]].filter(([,v])=>v).map(([l,v])=>`<div class="detail-card"><div class="section-label">${l}</div><div class="detail-text" style="margin-top:4px">${v}</div></div>`).join('')}<div style="text-align:center;color:#9CA3AF;font-size:12px;margin-top:8px">建立：${(r.created_at||'').slice(0,10)}</div>`;document.getElementById('detail-panel').classList.add('open');}
+function closeDetail(){document.getElementById('detail-panel').classList.remove('open');currentRecord=null;}
+async function quickUpdateGrade(grade){if(!currentRecord)return;await fetch(`/api/records/${currentRecord.id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({grade})});currentRecord.grade=grade;await fetchRecords();showDetail(currentRecord.id);showToast('等級已更新');}
+async function deleteRecord(){if(!currentRecord||!confirm('確定刪除？'))return;await fetch(`/api/records/${currentRecord.id}`,{method:'DELETE'});await fetchRecords();closeDetail();showToast('已刪除');}
+function showStats(){const total=records.length;const A=records.filter(r=>r.grade==='A').length;const B=records.filter(r=>r.grade==='B').length;const C=records.filter(r=>r.grade==='C').length;const SP=records.filter(r=>r.format==='SP/78轉蟲膠').length;document.getElementById('stats-body').innerHTML=`<div class="stats-grid">${[['總計',total,'#1F2937','#F9FAFB'],['A級精品',A,'#D97706','#FEF3C7'],['B級流通',B,'#1D4ED8','#DBEAFE'],['C級散貨',C,'#6B7280','#F3F4F6'],['78轉蟲膠',SP,'#7C3AED','#EDE9FE']].map(([l,v,c,bg])=>`<div class="stat-card" style="background:${bg}"><div class="stat-num" style="color:${c}">${v}</div><div class="stat-label" style="color:${c}">${l}</div></div>`).join('')}</div><a href="/api/export-csv" class="export-btn" style="display:block;text-decoration:none;text-align:center">📊 匯出 CSV</a><div class="detail-card"><div class="section-label">各格式分佈</div>${['LP (33轉)','SP/78轉蟲膠','EP (45轉)','其他'].map(f=>{const cnt=records.filter(r=>r.format===f).length;if(!cnt)return'';return`<div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #F3F4F6"><span style="font-size:14px;color:#374151">${f}</span><span style="font-weight:700;color:#1F2937">${cnt} 張</span></div>`;}).join('')}</div>`;document.getElementById('stats-panel').classList.add('open');}
+function showToast(msg,type='success'){const el=document.getElementById('toast');el.className=`toast ${type}`;el.textContent=msg;el.style.display='block';setTimeout(()=>el.style.display='none',3000);}
+fetchRecords();
+</script>
+</body>
+    </html>                                         
