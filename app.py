@@ -120,7 +120,7 @@ def ai_recognize():
         max_tokens=1024,
         messages=[{"role": "user", "content": [
             {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": image_data}},
-            {"type": "text", "text": '你是黑膠唱片專家。分析圖片，只回傳JSON：{"artist":"","album":"","year":"","label":"","format":"","genre":"","tracks":"","condition":"","suggested_grade":"A或B或C","estimated_value":"台幣範圍","notes":""}'}
+            {"type": "text", "text": '你是黑膠唱片專家。請用繁體中文分析圖片，只回傳JSON不要其他文字：{"artist":"藝人名稱","album":"專輯名稱","year":"年份","label":"唱片公司","format":"LP或SP或EP","genre":"音樂類型（中文）","tracks":"曲目列表（中文）","condition":"品相描述（中文）","suggested_grade":"A或B或C","estimated_value":"估計台幣價值","notes":"收藏備註（中文）"}'}
         ]}]
     )
     text = message.content[0].text
