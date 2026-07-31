@@ -50,7 +50,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #
 .chevron { color: #D1D5DB; font-size: 18px; }
 .empty { text-align: center; padding: 60px 20px; color: #9CA3AF; }
 .empty-icon { font-size: 48px; margin-bottom: 12px; }
-.fab { position: fixed; bottom: 24px; right: 24px; width: 56px; height: 56px; border-radius: 50%; background: #1a1a2e; color: #fff; font-size: 28px; border: none; cursor: pointer; box-shadow: 0 4px 16px rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center; z-index: 200; }
+.fab { position: fixed; bottom: 24px; right: 24px; width: 56px; height: 56px; border-radius: 50%; background: #1a1a2e; color: #fff; font-size: 28px; border: none; cursor: pointer; box-shadow: 0 4px 16px rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center; z-index: 200; user-select: none; -webkit-user-select: none; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
 .panel { position: fixed; inset: 0; background: #F5F5F5; z-index: 300; overflow-y: auto; display: none; }
 .panel.open { display: block; }
 .panel-header { background: #1a1a2e; color: #fff; padding: 14px 16px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; }
@@ -124,7 +124,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #
   <div class="record-list" id="record-list">
     <div class="empty"><div class="empty-icon">&#128230;</div><div>還沒有任何庫存<br>點擊下方「＋」開始新增</div></div>
   </div>
-  <button class="fab" onclick="showAdd()">＋</button>
+  <button class="fab" id="fab-btn">＋</button>
 </div>
 <div class="panel" id="add-panel">
   <div class="panel-header">
@@ -215,6 +215,8 @@ function deleteRecord(){if(!currentRecord||!confirm('確定刪除？'))return;va
 function showStats(){var total=records.length;var A=records.filter(function(r){return r.grade==='A';}).length;var B=records.filter(function(r){return r.grade==='B';}).length;var C=records.filter(function(r){return r.grade==='C';}).length;var SP=records.filter(function(r){return r.format==='SP/78轉蟲膠';}).length;var sd=[['總計',total,'#1F2937','#F9FAFB'],['A級精品',A,'#D97706','#FEF3C7'],['B級流通',B,'#1D4ED8','#DBEAFE'],['C級散貨',C,'#6B7280','#F3F4F6'],['78轉蟲膠',SP,'#7C3AED','#EDE9FE']];var html='<div class="stats-grid">'+sd.map(function(s){return'<div class="stat-card" style="background:'+s[3]+'"><div class="stat-num" style="color:'+s[2]+'">'+s[1]+'</div><div class="stat-label" style="color:'+s[2]+'">'+s[0]+'</div></div>';}).join('')+'</div><a href="/api/export-csv" class="export-btn">匯出 CSV</a><div class="detail-card"><div class="section-label">各格式分佈</div>';['LP (33轉)','SP/78轉蟲膠','EP (45轉)','其他'].forEach(function(f){var cnt=records.filter(function(r){return r.format===f;}).length;if(cnt)html+='<div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #F3F4F6"><span style="font-size:14px;color:#374151">'+f+'</span><span style="font-weight:700;color:#1F2937">'+cnt+' 張</span></div>';});html+='</div>';document.getElementById('stats-body').innerHTML=html;document.getElementById('stats-panel').classList.add('open');}
 function showToast(msg,type){var el=document.getElementById('toast');el.className='toast '+(type||'success');el.textContent=msg;el.style.display='block';setTimeout(function(){el.style.display='none';},3000);}
 fetchRecords();
+document.getElementById('fab-btn').addEventListener('touchend', function(e){e.preventDefault();showAdd();});
+document.getElementById('fab-btn').addEventListener('click', function(e){e.preventDefault();showAdd();});
 </script>
 </body>
 </html>"""
