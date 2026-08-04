@@ -103,8 +103,11 @@ def serve_upload(filename):
     return send_from_directory(UPLOAD_FOLDER, filename)
 
 
+GOOGLE_VISION_KEY = "AIzaSyBfIQN6Uvs0wAhezO25OTK-Vx-Uht-yfr8"
+
 @app.route("/api/ai-recognize", methods=["POST"])
 def ai_recognize():
+    import requests as req
     data = request.json
     image_url = data.get("image_url", "")
     filename = image_url.replace("/uploads/", "")
@@ -113,14 +116,48 @@ def ai_recognize():
         return jsonify({"error": "Image not found"}), 404
     with open(filepath, "rb") as f:
         image_data = base64.b64encode(f.read()).decode("utf-8")
+
+    # Step 1: Google Vision OCR
+    ocr_text = ""
+    try:
+        vision_url = "https://vision.googleapis.com/v1/images:annotate?key=" + GOOGLE_VISION_KEY
+        vision_payload = {
+            "requests": [{
+                "image": {"content": image_data},
+                "features": [
+                    {"type": "TEXT_DETECTION", "maxResults": 1},
+                    {"type": "LABEL_DETECTION", "maxResults": 10},
+                    {"type": "LOGO_DETECTION", "maxResults": 5}
+                ]
+            }]
+        }
+        vision_resp = req.post(vision_url, json=vision_payload, timeout=15)
+        vision_data = vision_resp.json()
+        annotations = vision_data.get("responses", [{}])[0]
+        full_text = annotations.get("fullTextAnnotation", {}).get("text", "")
+        labels = [l.get("description","") for l in annotations.get("labelAnnotations", [])]
+        logos = [l.get("description","") for l in annotations.get("logoAnnotations", [])]
+        ocr_text = "OCR文字：" + full_text + "\n標籤：" + ", ".join(labels) + "\nLogo：" + ", ".join(logos)
+    except Exception as e:
+        ocr_text = "OCR失敗：" + str(e)
+
+    # Step 2: Claude analyzes OCR + image
     ext = filepath.rsplit(".", 1)[-1].lower()
     media_type = "image/jpeg" if ext in ["jpg", "jpeg"] else "image/" + ext
+    prompt = ("你是黑膠唱片專家，熟悉Discogs實際成交行情。\n"
+              "Google Vision已從圖片辨識出以下資訊：\n" + ocr_text + "\n\n"
+              "請根據以上OCR資訊和圖片，用繁體中文分析這張黑膠唱片。\n"
+              "注意：suggested_grade只能填A、B或C（A=稀有高價值，B=一般流通，C=散貨低價值）。\n"
+              "估價規則（保守估價）：K-tel/Ronco合輯約USD$1-5；一般流行LP約USD$2-15；知名藝人約USD$5-50；稀有絕版約USD$20-150；78轉蟲膠約USD$5-80。\n"
+              "所有欄位必須用繁體中文。\n"
+              'only return JSON: {"artist":"","album":"","year":"","label":"","format":"","genre":"","tracks":"","condition":"","suggested_grade":"","estimated_value":"USD$X-Y（約NT$X-Y）","notes":""}')
+
     message = client.messages.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=1024,
         messages=[{"role": "user", "content": [
             {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": image_data}},
-            {"type": "text", "text": "你是黑膠唱片專家，熟悉Discogs實際成交行情。請全部用繁體中文回答。注意：suggested_grade只能填A、B或C三個字母之一（A=稀有高價值，B=一般流通，C=散貨低價值），不要填VG/G+等其他格式。估價規則（保守估價）：K-tel/Ronco合輯約USD$1-5；一般流行LP約USD$2-15；知名藝人約USD$5-50；稀有絕版約USD$20-150；78轉蟲膠約USD$5-80。所有文字欄位包括genre/tracks/condition/notes都必須用繁體中文，不可以用英文。只回傳JSON：{artist,album,year,label,format,genre,tracks,condition,suggested_grade,estimated_value,notes}，estimated_value格式為USD$X-Y（約NT$X-Y）"}
+            {"type": "text", "text": prompt}
         ]}]
     )
     text = message.content[0].text
