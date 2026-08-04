@@ -120,7 +120,7 @@ def ai_recognize():
         max_tokens=1024,
         messages=[{"role": "user", "content": [
             {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": image_data}},
-            {"type": "text", "text": '你是黑膠唱片專家，熟悉Discogs實際成交行情。請用繁體中文分析圖片。估價規則：K-tel/Ronco等大量發行合輯約100-300台幣；一般流行LP約200-800台幣；知名藝人熱門專輯約500-2000台幣；稀有或絕版LP約1000-5000台幣；78轉蟲膠SP依年代約300-3000台幣；請保守估價，寧低勿高。只回傳JSON不要其他文字：{"artist":"藝人名稱","album":"專輯名稱","year":"年份","label":"唱片公司","format":"LP或SP或EP","genre":"音樂類型（中文）","tracks":"曲目列表","condition":"品相描述（中文）","suggested_grade":"A或B或C","estimated_value":"保守估計台幣價值","notes":"收藏備註含市場分析（中文）"}\'}
+            {"type": "text", "text": '你是黑膠唱片專家，熟悉Discogs實際成交行情。請用繁體中文分析圖片。估價規則（保守估價寧低勿高）：K-tel/Ronco合輯約USD$1-5；一般流行LP約USD$2-15；知名藝人熱門專輯約USD$5-50；稀有絕版LP約USD$20-150；78轉蟲膠SP依年代約USD$5-80。只回傳JSON不要其他文字：{"artist":"藝人名稱","album":"專輯名稱","year":"年份","label":"唱片公司","format":"LP或SP或EP","genre":"音樂類型（中文）","tracks":"曲目列表","condition":"品相描述（中文）","suggested_grade":"A或B或C","estimated_value":"USD$X-Y（約NT$X-Y）","notes":"收藏備註含Discogs市場分析（中文）"}\'}
         ]}]
     )
     text = message.content[0].text
