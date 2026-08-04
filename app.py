@@ -120,7 +120,7 @@ def ai_recognize():
         max_tokens=1024,
         messages=[{"role": "user", "content": [
             {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": image_data}},
-            {"type": "text", "text": "你是黑膠唱片專家，熟悉Discogs實際成交行情。請用繁體中文分析圖片。估價規則（保守估價寧低勿高）：K-tel/Ronco合輯約USD$1-5；一般流行LP約USD$2-15；知名藝人熱門專輯約USD$5-50；稀有絕版LP約USD$20-150；78轉蟲膠SP依年代約USD$5-80。只回傳JSON不要其他文字，格式：{artist,album,year,label,format,genre,tracks,condition,suggested_grade,estimated_value,notes}，estimated_value格式為USD$X-Y（約NT$X-Y）"}
+            {"type": "text", "text": "你是黑膠唱片專家，熟悉Discogs實際成交行情。請全部用繁體中文回答。注意：suggested_grade只能填A、B或C三個字母之一（A=稀有高價值，B=一般流通，C=散貨低價值），不要填VG/G+等其他格式。估價規則（保守估價）：K-tel/Ronco合輯約USD$1-5；一般流行LP約USD$2-15；知名藝人約USD$5-50；稀有絕版約USD$20-150；78轉蟲膠約USD$5-80。所有文字欄位包括genre/tracks/condition/notes都必須用繁體中文，不可以用英文。只回傳JSON：{artist,album,year,label,format,genre,tracks,condition,suggested_grade,estimated_value,notes}，estimated_value格式為USD$X-Y（約NT$X-Y）"}
         ]}]
     )
     text = message.content[0].text
