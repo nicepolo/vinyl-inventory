@@ -13,6 +13,8 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
 GOOGLE_VISION_KEY = os.environ.get("GOOGLE_VISION_KEY", "")
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 AI_TIMEOUT_SECONDS = float(os.environ.get("AI_TIMEOUT_SECONDS", "25"))
@@ -58,6 +60,23 @@ def parse_json_object(text):
     if start < 0 or end <= start:
         raise ProviderError("AI 回傳格式不正確，請重試", 502)
     return json.loads(cleaned[start:end + 1])
+
+def recognize_with_gemini(image_data, media_type, prompt):
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
+    response = post_with_retry(url, json={
+        "contents": [{"parts": [
+            {"inline_data": {"mime_type": media_type, "data": image_data}},
+            {"text": prompt}
+        ]}],
+        "generationConfig": {"responseMimeType": "application/json", "maxOutputTokens": 1600}
+    })
+    if not response.ok:
+        raise friendly_provider_error("Gemini", response.status_code, response.text[:500])
+    payload = response.json()
+    text = "".join(part.get("text", "") for part in payload.get("candidates", [{}])[0].get("content", {}).get("parts", []))
+    if not text:
+        raise ProviderError("Gemini 沒有回傳可用內容，可能被安全過濾擋下", 502)
+    return parse_json_object(text)
 
 def parse_db_url(url):
     # postgresql://user:pass@host:port/dbname
@@ -253,6 +272,20 @@ def ai_recognize():
               + ocr_text + "\n\n"
               "請用繁體中文，只回傳 JSON。suggested_grade 只能是 A、B、C；單張封面無法確認唱片實際品相時用 B，並在 low_confidence 列出 condition 與 suggested_grade。estimated_value 一律留空，除非照片清楚印有售價。\n"
               '格式：{"artist":"","album":"","year":"","label":"","format":"","genre":"","tracks":"","condition":"","suggested_grade":"B","estimated_value":"","notes":"","low_confidence":[]}')
+    gemini_error = None
+    if GEMINI_API_KEY:
+        try:
+            result = recognize_with_gemini(image_data, media_type, prompt)
+            if result.get("suggested_grade") not in ("A", "B", "C"):
+                result["suggested_grade"] = "B"
+            result["estimated_value"] = ""
+            result["_engine"] = "gemini+google_vision" if (full_text or labels or logos) else "gemini"
+            return jsonify(result)
+        except (ProviderError, json.JSONDecodeError, KeyError, IndexError) as exc:
+            gemini_error = exc if isinstance(exc, ProviderError) else ProviderError("Gemini 回傳格式不正確，已改用備援服務", 502)
+    else:
+        gemini_error = ProviderError("尚未設定 Gemini", 503)
+
     anthropic_error = None
     if ANTHROPIC_API_KEY:
         try:
@@ -269,7 +302,12 @@ def ai_recognize():
             payload = response.json()
             text = "".join(part.get("text", "") for part in payload.get("content", []) if part.get("type") == "text")
             result = parse_json_object(text)
+            if result.get("suggested_grade") not in ("A", "B", "C"):
+                result["suggested_grade"] = "B"
+            result["estimated_value"] = ""
             result["_engine"] = "anthropic+google_vision" if (full_text or labels or logos) else "anthropic"
+            if gemini_error:
+                result["warning"] = str(gemini_error)
             return jsonify(result)
         except (ProviderError, json.JSONDecodeError) as exc:
             anthropic_error = exc if isinstance(exc, ProviderError) else ProviderError("AI 回傳格式不正確，請重試", 502)
@@ -286,10 +324,11 @@ def ai_recognize():
             "suggested_grade": "B", "estimated_value": "",
             "notes": "目前使用 Google Vision 備援辨識；請依封面文字人工確認。",
             "low_confidence": ["artist", "album", "year", "label", "format", "genre", "tracks", "condition", "suggested_grade"],
-            "_engine": "google_vision_fallback", "warning": str(anthropic_error)
+            "_engine": "google_vision_fallback",
+            "warning": "；".join(str(err) for err in (gemini_error, anthropic_error) if err)
         })
 
-    errors = [str(err) for err in (anthropic_error, vision_error) if err]
+    errors = [str(err) for err in (gemini_error, anthropic_error, vision_error) if err]
     return jsonify({"error": "辨識暫時無法完成。" + "；".join(errors)}), 503
 
 @app.route("/api/export-csv")
