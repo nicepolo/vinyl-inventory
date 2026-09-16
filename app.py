@@ -8,9 +8,6 @@ import requests
 app = Flask(__name__, static_folder="static", static_url_path="/static")
 CORS(app)
 
-UPLOAD_FOLDER = "uploads"
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
@@ -133,6 +130,15 @@ def init_db():
     cur.execute("ALTER TABLE records ADD COLUMN IF NOT EXISTS photo_uploaded_by TEXT DEFAULT ''")
     cur.execute("UPDATE records SET created_by='Polo' WHERE created_by IS NULL OR created_by=''")
     cur.execute("UPDATE records SET photo_uploaded_by='Polo' WHERE image_url<>'' AND (photo_uploaded_by IS NULL OR photo_uploaded_by='')")
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS uploaded_images (
+            filename TEXT PRIMARY KEY,
+            mime_type TEXT NOT NULL,
+            data BYTEA NOT NULL,
+            uploaded_by TEXT DEFAULT '',
+            created_at TIMESTAMP DEFAULT NOW()
+        )
+    """)
     conn.commit()
     cur.close()
     conn.close()
@@ -290,14 +296,35 @@ def upload_image():
         return jsonify({"error": "No file"}), 400
     file = request.files["file"]
     ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else "jpg"
+    allowed = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp", "gif": "image/gif"}
+    if ext not in allowed:
+        return jsonify({"error": "只支援 JPG、PNG、WebP 或 GIF 圖片"}), 400
+    image_bytes = file.read()
+    if not image_bytes or len(image_bytes) > 18_000_000:
+        return jsonify({"error": "照片格式不正確或檔案過大"}), 400
     filename = str(uuid.uuid4()) + "." + ext
-    filepath = os.path.join(UPLOAD_FOLDER, filename)
-    file.save(filepath)
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO uploaded_images (filename,mime_type,data,uploaded_by) VALUES (%s,%s,%s,%s)",
+        (filename, allowed[ext], image_bytes, request.user_name)
+    )
+    conn.commit()
+    cur.close()
+    conn.close()
     return jsonify({"url": "/uploads/" + filename})
 
 @app.route("/uploads/<filename>")
 def serve_upload(filename):
-    return send_from_directory(UPLOAD_FOLDER, filename)
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT mime_type,data FROM uploaded_images WHERE filename=%s", (os.path.basename(filename),))
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+    if not row:
+        return jsonify({"error": "照片檔案不存在，請重新上傳"}), 404
+    return Response(bytes(row[1]), mimetype=row[0], headers={"Cache-Control": "private, max-age=86400"})
 
 @app.route("/api/ai-recognize", methods=["POST"])
 def ai_recognize():
@@ -318,13 +345,16 @@ def ai_recognize():
         filename = os.path.basename(image_url.replace("/uploads/", ""))
         if not image_url.startswith("/uploads/") or not filename:
             return jsonify({"error": "圖片路徑無效"}), 400
-        filepath = os.path.join(UPLOAD_FOLDER, filename)
-        if not os.path.exists(filepath):
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute("SELECT mime_type,data FROM uploaded_images WHERE filename=%s", (filename,))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        if not row:
             return jsonify({"error": "找不到要辨識的圖片"}), 404
-        with open(filepath, "rb") as f:
-            image_data = base64.b64encode(f.read()).decode("utf-8")
-        ext2 = filepath.rsplit(".", 1)[-1].lower()
-        media_type = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp", "gif": "image/gif"}.get(ext2, "image/jpeg")
+        media_type = row[0]
+        image_data = base64.b64encode(bytes(row[1])).decode("utf-8")
     full_text, labels, logos = "", [], []
     vision_error = None
     if GOOGLE_VISION_KEY:
