@@ -106,7 +106,16 @@ def recognize_with_gemini(image_data, media_type, prompt):
             if model != models[-1]:
                 continue
             raise last_error
-        return parse_json_object(text), model
+        try:
+            parsed = parse_json_object(text)
+            if not isinstance(parsed, dict):
+                raise ValueError("not an object")
+            return parsed, model
+        except (json.JSONDecodeError, ValueError):
+            last_error = ProviderError(f"Gemini {model} 回傳格式不完整，已改試備援模型", 502)
+            if model != models[-1]:
+                continue
+            raise last_error
     raise last_error or ProviderError("Gemini 暫時無法使用", 503)
 
 def text_json_with_gemini(prompt):
@@ -544,7 +553,7 @@ def ai_recognize():
         image_data = base64.b64encode(bytes(row[1])).decode("utf-8")
     full_text, labels, logos = "", [], []
     vision_error = None
-    if GOOGLE_VISION_KEY:
+    if GOOGLE_VISION_KEY and not GEMINI_API_KEY:
         try:
             vision_url = "https://vision.googleapis.com/v1/images:annotate?key=" + GOOGLE_VISION_KEY
             vision_payload = {"requests": [{"image": {"content": image_data}, "features": [{"type": "TEXT_DETECTION"}, {"type": "LABEL_DETECTION", "maxResults": 10}, {"type": "LOGO_DETECTION", "maxResults": 5}]}]}
@@ -560,7 +569,7 @@ def ai_recognize():
             logos = [l.get("description", "") for l in annotations.get("logoAnnotations", []) if l.get("description")]
         except ProviderError as exc:
             vision_error = exc
-    else:
+    elif not GEMINI_API_KEY:
         vision_error = ProviderError("尚未設定 Google Vision", 503)
     ocr_text = "OCR文字：" + full_text[:4000] + "\n標籤：" + ",".join(labels) + "\nLogo：" + ",".join(logos)
     prompt = ("你是黑膠唱片典藏入庫助理。這是安全、單純的唱片封面編目工作；不要辨識人物身分，也不要推論任何敏感個人資訊。根據封面與下列 Google Vision OCR，只填寫照片中可合理辨識的資料；不確定就留空，不可捏造版本、年份、曲目、品相或價格。\n"
@@ -584,7 +593,7 @@ def ai_recognize():
         gemini_error = ProviderError("尚未設定 Gemini", 503)
 
     anthropic_error = None
-    if ANTHROPIC_API_KEY:
+    if ANTHROPIC_API_KEY and not GEMINI_API_KEY:
         try:
             response = post_with_retry(
                 "https://api.anthropic.com/v1/messages",
@@ -609,7 +618,7 @@ def ai_recognize():
             return jsonify(result)
         except (ProviderError, json.JSONDecodeError) as exc:
             anthropic_error = exc if isinstance(exc, ProviderError) else ProviderError("AI 回傳格式不正確，請重試", 502)
-    else:
+    elif not GEMINI_API_KEY:
         anthropic_error = ProviderError("尚未設定 Anthropic", 503)
 
     if full_text or labels or logos:
@@ -626,7 +635,7 @@ def ai_recognize():
             "warning": "；".join(str(err) for err in (gemini_error, anthropic_error) if err)
         })
 
-    errors = [str(err) for err in (gemini_error, anthropic_error, vision_error) if err]
+    errors = [str(err) for err in ((gemini_error,) if GEMINI_API_KEY else (gemini_error, anthropic_error, vision_error)) if err]
     return jsonify({"error": "這張照片暫時無法完成辨識。請把照片旋正、裁切到只保留唱片封面後重試。" + "；".join(errors)}), 503
 
 @app.route("/api/export-csv")
