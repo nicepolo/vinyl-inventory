@@ -574,8 +574,14 @@ function shareCategory() {
 function loadShares() {
   var box=document.getElementById('share-list'); if(!box)return;
   fetch('/api/shares').then(jsonOrError).then(function(shares){
-    box.innerHTML=shares.length?'<div class="section-label" style="margin:14px 0 6px">已建立連結</div>'+shares.map(function(s){return '<div class="detail-card" style="display:flex;justify-content:space-between;gap:8px;align-items:center"><div style="min-width:0;font-size:12px"><b>'+escapeHtml(s.title||'客戶分享')+'</b><br><span style="color:#6b7280">到期 '+String(s.expires_at||'').slice(0,10)+'</span></div><button class="danger-btn" onclick="revokeShare(\''+s.token+'\')">撤銷</button></div>';}).join(''):'';
+    box.innerHTML=shares.length?'<div class="section-label" style="margin:14px 0 6px">已建立連結</div>'+shares.map(function(s){return '<div class="detail-card" style="display:flex;justify-content:space-between;gap:8px;align-items:center"><div style="min-width:0;font-size:12px"><b>'+escapeHtml(s.title||'客戶分享')+'</b><br><span style="color:#6b7280">到期 '+String(s.expires_at||'').slice(0,10)+'</span></div><div style="display:flex;gap:6px"><button class="share-mini" onclick="copyShareLink(\''+s.token+'\',this)">複製</button><button class="danger-btn" onclick="revokeShare(\''+s.token+'\')">撤銷</button></div></div>';}).join(''):'';
   }).catch(function(){});
+}
+
+function copyShareLink(token, btn) {
+  var url=location.origin+'/share/'+token;
+  if(navigator.clipboard) navigator.clipboard.writeText(url).then(function(){var old=btn.textContent;btn.textContent='已複製 ✓';setTimeout(function(){btn.textContent=old;},1600);}).catch(function(){window.prompt('請複製這個分享連結',url);});
+  else window.prompt('請複製這個分享連結',url);
 }
 
 function revokeShare(token) {
