@@ -206,14 +206,28 @@ def serve_upload(filename):
 def ai_recognize():
     data = request.get_json(silent=True) or {}
     image_url = data.get("image_url", "")
-    filename = os.path.basename(image_url.replace("/uploads/", ""))
-    if not image_url.startswith("/uploads/") or not filename:
-        return jsonify({"error": "圖片路徑無效"}), 400
-    filepath = os.path.join(UPLOAD_FOLDER, filename)
-    if not os.path.exists(filepath):
-        return jsonify({"error": "找不到要辨識的圖片"}), 404
-    with open(filepath, "rb") as f:
-        image_data = base64.b64encode(f.read()).decode("utf-8")
+    inline_image = data.get("image_data", "")
+    media_type = "image/jpeg"
+    if inline_image:
+        if "," in inline_image:
+            header, image_data = inline_image.split(",", 1)
+            if header.startswith("data:image/"):
+                media_type = header[5:].split(";", 1)[0]
+        else:
+            image_data = inline_image
+        if not image_data or len(image_data) > 18_000_000:
+            return jsonify({"error": "照片格式不正確或檔案過大"}), 400
+    else:
+        filename = os.path.basename(image_url.replace("/uploads/", ""))
+        if not image_url.startswith("/uploads/") or not filename:
+            return jsonify({"error": "圖片路徑無效"}), 400
+        filepath = os.path.join(UPLOAD_FOLDER, filename)
+        if not os.path.exists(filepath):
+            return jsonify({"error": "找不到要辨識的圖片"}), 404
+        with open(filepath, "rb") as f:
+            image_data = base64.b64encode(f.read()).decode("utf-8")
+        ext2 = filepath.rsplit(".", 1)[-1].lower()
+        media_type = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp", "gif": "image/gif"}.get(ext2, "image/jpeg")
     full_text, labels, logos = "", [], []
     vision_error = None
     if GOOGLE_VISION_KEY:
@@ -235,8 +249,6 @@ def ai_recognize():
     else:
         vision_error = ProviderError("尚未設定 Google Vision", 503)
     ocr_text = "OCR文字：" + full_text[:4000] + "\n標籤：" + ",".join(labels) + "\nLogo：" + ",".join(logos)
-    ext2 = filepath.rsplit(".", 1)[-1].lower()
-    media_type = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp", "gif": "image/gif"}.get(ext2, "image/jpeg")
     prompt = ("你是黑膠唱片入庫助理。根據封面與下列 Google Vision OCR，只填寫照片中可合理辨識的資料；不確定就留空，不可捏造版本、年份、曲目、品相或價格。\n"
               + ocr_text + "\n\n"
               "請用繁體中文，只回傳 JSON。suggested_grade 只能是 A、B、C；單張封面無法確認唱片實際品相時用 B，並在 low_confidence 列出 condition 與 suggested_grade。estimated_value 一律留空，除非照片清楚印有售價。\n"
