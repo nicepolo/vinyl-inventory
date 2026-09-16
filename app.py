@@ -61,6 +61,18 @@ def parse_json_object(text):
         raise ProviderError("AI 回傳格式不正確，請重試", 502)
     return json.loads(cleaned[start:end + 1])
 
+def apply_bilingual_names(result):
+    def combine(base):
+        zh = str(result.get(base + "_zh", "") or "").strip()
+        original = str(result.get(base + "_original", "") or "").strip()
+        current = str(result.get(base, "") or "").strip()
+        if zh and original and zh.casefold() != original.casefold():
+            return f"{zh} / {original}"
+        return zh or original or current
+    result["artist"] = combine("artist")
+    result["album"] = combine("album")
+    return result
+
 def recognize_with_gemini(image_data, media_type, prompt):
     last_error = None
     models = list(dict.fromkeys(model for model in (GEMINI_MODEL, GEMINI_FALLBACK_MODEL) if model))
@@ -71,17 +83,29 @@ def recognize_with_gemini(image_data, media_type, prompt):
                 {"inline_data": {"mime_type": media_type, "data": image_data}},
                 {"text": prompt}
             ]}],
-            "generationConfig": {"responseMimeType": "application/json", "maxOutputTokens": 1600}
+            "generationConfig": {"responseMimeType": "application/json", "maxOutputTokens": 1800, "temperature": 0.1},
+            "safetySettings": [
+                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_ONLY_HIGH"},
+                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_ONLY_HIGH"},
+                {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_ONLY_HIGH"},
+                {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_ONLY_HIGH"}
+            ]
         })
         if not response.ok:
             last_error = friendly_provider_error(f"Gemini {model}", response.status_code, response.text[:500])
-            if last_error.transient and model != models[-1]:
+            if model != models[-1] and response.status_code not in (401, 403):
                 continue
             raise last_error
         payload = response.json()
-        text = "".join(part.get("text", "") for part in payload.get("candidates", [{}])[0].get("content", {}).get("parts", []))
+        candidates = payload.get("candidates") or []
+        candidate = candidates[0] if candidates else {}
+        text = "".join(part.get("text", "") for part in candidate.get("content", {}).get("parts", []))
         if not text:
-            raise ProviderError(f"Gemini {model} 沒有回傳可用內容，可能被安全過濾擋下", 502)
+            reason = candidate.get("finishReason") or payload.get("promptFeedback", {}).get("blockReason") or "無內容"
+            last_error = ProviderError(f"Gemini {model} 沒有回傳可用內容（{reason}），已改試備援模型", 502)
+            if model != models[-1]:
+                continue
+            raise last_error
         return parse_json_object(text), model
     raise last_error or ProviderError("Gemini 暫時無法使用", 503)
 
@@ -376,14 +400,15 @@ def ai_recognize():
     else:
         vision_error = ProviderError("尚未設定 Google Vision", 503)
     ocr_text = "OCR文字：" + full_text[:4000] + "\n標籤：" + ",".join(labels) + "\nLogo：" + ",".join(logos)
-    prompt = ("你是黑膠唱片入庫助理。根據封面與下列 Google Vision OCR，只填寫照片中可合理辨識的資料；不確定就留空，不可捏造版本、年份、曲目、品相或價格。\n"
+    prompt = ("你是黑膠唱片典藏入庫助理。這是安全、單純的唱片封面編目工作；不要辨識人物身分，也不要推論任何敏感個人資訊。根據封面與下列 Google Vision OCR，只填寫照片中可合理辨識的資料；不確定就留空，不可捏造版本、年份、曲目、品相或價格。\n"
               + ocr_text + "\n\n"
-              "請用繁體中文，只回傳 JSON。suggested_grade 只能是 A、B、C；單張封面無法確認唱片實際品相時用 B，並在 low_confidence 列出 condition 與 suggested_grade。estimated_value 一律留空，除非照片清楚印有售價。\n"
-              '格式：{"artist":"","album":"","year":"","label":"","format":"","genre":"","tracks":"","condition":"","suggested_grade":"B","estimated_value":"","notes":"","low_confidence":[]}')
+              "請用繁體中文，只回傳 JSON。artist_zh 與 album_zh 填繁體中文譯名或常用音譯；artist_original 與 album_original 保留封面原文。中英文都必須盡量提供，禁止把英文原文丟掉。若沒有公認中文名稱，可做忠實音譯並在 low_confidence 標記。suggested_grade 只能是 A、B、C；單張封面無法確認唱片實際品相時用 B，並在 low_confidence 列出 condition 與 suggested_grade。estimated_value 一律留空，除非照片清楚印有售價。\n"
+              '格式：{"artist_zh":"","artist_original":"","album_zh":"","album_original":"","artist":"","album":"","year":"","label":"","format":"","genre":"","tracks":"","condition":"","suggested_grade":"B","estimated_value":"","notes":"","low_confidence":[]}')
     gemini_error = None
     if GEMINI_API_KEY:
         try:
             result, gemini_model = recognize_with_gemini(image_data, media_type, prompt)
+            result = apply_bilingual_names(result)
             if result.get("suggested_grade") not in ("A", "B", "C"):
                 result["suggested_grade"] = "B"
             result["estimated_value"] = ""
@@ -411,6 +436,7 @@ def ai_recognize():
             payload = response.json()
             text = "".join(part.get("text", "") for part in payload.get("content", []) if part.get("type") == "text")
             result = parse_json_object(text)
+            result = apply_bilingual_names(result)
             if result.get("suggested_grade") not in ("A", "B", "C"):
                 result["suggested_grade"] = "B"
             result["estimated_value"] = ""
@@ -438,7 +464,7 @@ def ai_recognize():
         })
 
     errors = [str(err) for err in (gemini_error, anthropic_error, vision_error) if err]
-    return jsonify({"error": "辨識暫時無法完成。" + "；".join(errors)}), 503
+    return jsonify({"error": "這張照片暫時無法完成辨識。請把照片旋正、裁切到只保留唱片封面後重試。" + "；".join(errors)}), 503
 
 @app.route("/api/export-csv")
 def export_csv():
