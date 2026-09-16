@@ -1,4 +1,4 @@
-import os, json, uuid, base64, time, hmac, hashlib
+import os, json, uuid, base64, time, hmac, hashlib, re
 from datetime import datetime
 from flask import Flask, request, jsonify, send_from_directory, Response, redirect
 from flask_cors import CORS
@@ -107,6 +107,29 @@ def recognize_with_gemini(image_data, media_type, prompt):
                 continue
             raise last_error
         return parse_json_object(text), model
+    raise last_error or ProviderError("Gemini 暫時無法使用", 503)
+
+def text_json_with_gemini(prompt):
+    last_error = None
+    models = list(dict.fromkeys(model for model in (GEMINI_MODEL, GEMINI_FALLBACK_MODEL) if model))
+    for model in models:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}"
+        response = post_with_retry(url, json={
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"responseMimeType": "application/json", "maxOutputTokens": 2200, "temperature": 0.1}
+        })
+        if not response.ok:
+            last_error = friendly_provider_error(f"Gemini {model}", response.status_code, response.text[:500])
+            if model != models[-1] and response.status_code not in (401, 403):
+                continue
+            raise last_error
+        payload = response.json()
+        candidates = payload.get("candidates") or []
+        candidate = candidates[0] if candidates else {}
+        text = "".join(part.get("text", "") for part in candidate.get("content", {}).get("parts", []))
+        if text:
+            return parse_json_object(text), model
+        last_error = ProviderError(f"Gemini {model} 沒有回傳翻譯內容", 502)
     raise last_error or ProviderError("Gemini 暫時無法使用", 503)
 
 def parse_db_url(url):
@@ -300,6 +323,51 @@ def update_record(rid):
         return jsonify({"ok": True})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+@app.route("/api/records/bilingualize", methods=["POST"])
+def bilingualize_records():
+    if not GEMINI_API_KEY:
+        return jsonify({"error": "尚未設定 Gemini"}), 503
+    conn = get_db()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT id,artist,album FROM records ORDER BY created_at DESC LIMIT 50")
+        rows = cur.fetchall()
+        pending = [
+            {"id": row[0], "artist": row[1] or "", "album": row[2] or ""}
+            for row in rows
+            if not re.search(r"[\u3400-\u9fff]", (row[1] or "") + (row[2] or ""))
+        ]
+        if not pending:
+            return jsonify({"updated": 0, "message": "目前資料都已有中文"})
+        prompt = (
+            "你是繁體中文黑膠唱片編目翻譯員。請為下列 artist 與 album 提供忠實繁體中文譯名或常用音譯，"
+            "不可改動英文原文，不可新增不存在的版本資訊。只回傳 JSON："
+            '{"records":[{"id":"原id","artist_zh":"中文","album_zh":"中文"}]}。\n資料：'
+            + json.dumps(pending, ensure_ascii=False)
+        )
+        translated, model = text_json_with_gemini(prompt)
+        source = {item["id"]: item for item in pending}
+        updated = 0
+        for item in translated.get("records", []):
+            original = source.get(str(item.get("id", "")))
+            if not original:
+                continue
+            artist_zh = str(item.get("artist_zh", "") or "").strip()
+            album_zh = str(item.get("album_zh", "") or "").strip()
+            artist = f"{artist_zh} / {original['artist']}" if artist_zh and original["artist"] else (artist_zh or original["artist"])
+            album = f"{album_zh} / {original['album']}" if album_zh and original["album"] else (album_zh or original["album"])
+            cur.execute("UPDATE records SET artist=%s,album=%s,updated_at=NOW() WHERE id=%s", (artist, album, original["id"]))
+            updated += 1
+        conn.commit()
+        return jsonify({"updated": updated, "model": model})
+    except (ProviderError, json.JSONDecodeError) as exc:
+        conn.rollback()
+        message = str(exc) if isinstance(exc, ProviderError) else "Gemini 翻譯格式不正確"
+        return jsonify({"error": message}), 503
+    finally:
+        cur.close()
+        conn.close()
 
 @app.route("/api/records/<rid>", methods=["DELETE"])
 def delete_record(rid):

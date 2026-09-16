@@ -530,6 +530,7 @@ function showStats() {
     return '<div class="stat-card" style="background:' + s[3] + '"><div class="stat-num" style="color:' + s[2] + '">' + s[1] + '</div><div class="stat-label" style="color:' + s[2] + '">' + s[0] + '</div></div>';
   }).join('') + '</div>';
   html += '<a href="/api/export-csv" class="export-btn">匯出 CSV</a>';
+  html += '<button class="export-btn" style="background:#7C3AED" onclick="bilingualizeRecords()">補齊中英文名稱</button>';
   html += '<div class="detail-card"><div class="section-label">各格式分佈</div>';
   ['LP (33轉)', 'SP/78轉蟲膠', 'EP (45轉)', '其他'].forEach(function(f) {
     var cnt = records.filter(function(r) { return r.format === f; }).length;
@@ -538,6 +539,18 @@ function showStats() {
   html += '</div>';
   document.getElementById('stats-body').innerHTML = html;
   document.getElementById('stats-panel').classList.add('open');
+}
+
+function bilingualizeRecords() {
+  showToast('正在補齊中英文名稱…');
+  fetch('/api/records/bilingualize', {method: 'POST'})
+    .then(jsonOrError)
+    .then(function(result) {
+      fetchRecords();
+      document.getElementById('stats-panel').classList.remove('open');
+      showToast(result.updated ? ('已補齊 ' + result.updated + ' 筆中英文名稱') : (result.message || '目前不需要更新'));
+    })
+    .catch(function(err) { showToast(err.message || '補齊中英文失敗', 'error'); });
 }
 
 function showToast(msg, type) {
