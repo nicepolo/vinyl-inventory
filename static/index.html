@@ -31,8 +31,9 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 .count-bar { padding: 6px 16px; font-size: 13px; color: #6B7280; }
 .record-list { padding-bottom: 100px; }
 .record-row { display: flex; align-items: center; gap: 12px; padding: 12px 16px; background: #fff; border-bottom: 1px solid #F3F4F6; cursor: pointer; }
-.thumb { width: 56px; height: 56px; border-radius: 8px; flex-shrink: 0; background: #F3F4F6; display: flex; align-items: center; justify-content: center; font-size: 24px; overflow: hidden; }
+.thumb { position: relative; width: 56px; height: 56px; border-radius: 8px; flex-shrink: 0; background: #F3F4F6; display: flex; align-items: center; justify-content: center; font-size: 24px; overflow: hidden; }
 .thumb img { width: 100%; height: 100%; object-fit: cover; }
+.uploader-badge { position: absolute; right: 3px; bottom: 3px; max-width: 50px; padding: 1px 4px; border-radius: 4px; background: rgba(17,24,39,.78); color: #fff; font-size: 8px; line-height: 1.35; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .record-info { flex: 1; min-width: 0; }
 .record-artist { font-weight: 700; font-size: 15px; color: #1F2937; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .record-album { font-size: 13px; color: #6B7280; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -79,7 +80,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 .save-btn { width: 100%; padding: 14px; background: #1a1a2e; color: #fff; border: none; border-radius: 12px; font-size: 16px; font-weight: 700; cursor: pointer; margin-top: 8px; }
 .save-btn:disabled { opacity: 0.5; }
 .detail-body { padding: 16px 16px 40px; }
-.detail-img { width: 100%; border-radius: 12px; margin-bottom: 14px; max-height: 240px; object-fit: cover; }
+.detail-photo { position: relative; margin-bottom: 14px; }.detail-img { width: 100%; border-radius: 12px; max-height: 240px; object-fit: cover; display: block; }.detail-uploader { right: 8px; bottom: 8px; max-width: 180px; padding: 4px 8px; font-size: 11px; }
 .detail-card { background: #fff; border-radius: 12px; padding: 14px; margin-bottom: 10px; }
 .detail-artist { font-size: 22px; font-weight: 800; color: #1F2937; }
 .detail-album { font-size: 16px; color: #6B7280; margin-top: 4px; }
@@ -210,6 +211,12 @@ var uploadedImageUrl = '';
 var batchQueue = [];
 var batchProcessing = false;
 
+function escapeHtml(value) {
+  return String(value == null ? '' : value).replace(/[&<>"']/g, function(ch) {
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch];
+  });
+}
+
 function jsonOrError(res) {
   return res.json().catch(function() { return {}; }).then(function(data) {
     if (!res.ok) throw new Error(data.error || ('服務錯誤 ' + res.status));
@@ -244,7 +251,7 @@ function renderList() {
   var gradeLabel = {A: 'A級', B: 'B級', C: 'C級'};
   el.innerHTML = filtered.map(function(r) {
     return '<div class="record-row" onclick="showDetail(\'' + r.id + '\')">' +
-      '<div class="thumb">' + (r.image_url ? '<img src="' + r.image_url + '" onerror="this.parentElement.textContent=\'&#127925;\'">' : '&#127925;') + '</div>' +
+      '<div class="thumb">' + (r.image_url ? '<img src="' + r.image_url + '" onerror="this.parentElement.textContent=\'&#127925;\'">' + '<span class="uploader-badge">' + escapeHtml(r.photo_uploaded_by || '未知') + '</span>' : '&#127925;') + '</div>' +
       '<div class="record-info">' +
       '<div class="record-artist">' + (r.artist || '未知藝人') + '</div>' +
       '<div class="record-album">' + (r.album || '未知專輯') + '</div>' +
@@ -439,7 +446,7 @@ function showDetail(id) {
   var gc = {A: '#D97706', B: '#1D4ED8', C: '#6B7280'};
   var gb = {A: '#FEF3C7', B: '#DBEAFE', C: '#F3F4F6'};
   var gl = {A: 'A級精品', B: 'B級流通', C: 'C級散貨'};
-  var html = (r.image_url ? '<img class="detail-img" src="' + r.image_url + '">' : '') +
+  var html = (r.image_url ? '<div class="detail-photo"><img class="detail-img" src="' + r.image_url + '"><span class="uploader-badge detail-uploader">上傳者：' + escapeHtml(r.photo_uploaded_by || '未知') + '</span></div>' : '') +
     '<div class="detail-card">' +
     '<div class="detail-artist">' + (r.artist || '未知藝人') + '</div>' +
     '<div class="detail-album">' + (r.album || '未知專輯') + '</div>' +

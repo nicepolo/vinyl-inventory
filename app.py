@@ -123,10 +123,16 @@ def init_db():
             notes TEXT DEFAULT '',
             estimated_value TEXT DEFAULT '',
             image_url TEXT DEFAULT '',
+            created_by TEXT DEFAULT '',
+            photo_uploaded_by TEXT DEFAULT '',
             created_at TIMESTAMP DEFAULT NOW(),
             updated_at TIMESTAMP DEFAULT NOW()
         )
     """)
+    cur.execute("ALTER TABLE records ADD COLUMN IF NOT EXISTS created_by TEXT DEFAULT ''")
+    cur.execute("ALTER TABLE records ADD COLUMN IF NOT EXISTS photo_uploaded_by TEXT DEFAULT ''")
+    cur.execute("UPDATE records SET created_by='Polo' WHERE created_by IS NULL OR created_by=''")
+    cur.execute("UPDATE records SET photo_uploaded_by='Polo' WHERE image_url<>'' AND (photo_uploaded_by IS NULL OR photo_uploaded_by='')")
     conn.commit()
     cur.close()
     conn.close()
@@ -213,8 +219,8 @@ def get_records():
     try:
         conn = get_db()
         cur = conn.cursor()
-        cur.execute("SELECT id,artist,album,year,label,format,genre,grade,condition,tracks,notes,estimated_value,image_url,created_at,updated_at FROM records ORDER BY created_at DESC")
-        cols = ["id","artist","album","year","label","format","genre","grade","condition","tracks","notes","estimated_value","image_url","created_at","updated_at"]
+        cur.execute("SELECT id,artist,album,year,label,format,genre,grade,condition,tracks,notes,estimated_value,image_url,created_by,photo_uploaded_by,created_at,updated_at FROM records ORDER BY created_at DESC")
+        cols = ["id","artist","album","year","label","format","genre","grade","condition","tracks","notes","estimated_value","image_url","created_by","photo_uploaded_by","created_at","updated_at"]
         rows = [row_to_dict(cols, r) for r in cur.fetchall()]
         cur.close()
         conn.close()
@@ -229,12 +235,13 @@ def add_record():
     try:
         conn = get_db()
         cur = conn.cursor()
-        cur.execute("""INSERT INTO records (id,artist,album,year,label,format,genre,grade,condition,tracks,notes,estimated_value,image_url)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+        cur.execute("""INSERT INTO records (id,artist,album,year,label,format,genre,grade,condition,tracks,notes,estimated_value,image_url,created_by,photo_uploaded_by)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
             (rid, data.get("artist",""), data.get("album",""), data.get("year",""), data.get("label",""),
              data.get("format","LP (33\u8f49)"), data.get("genre",""), data.get("grade","B"),
              data.get("condition",""), data.get("tracks",""), data.get("notes",""),
-             data.get("estimated_value",""), data.get("image_url","")))
+             data.get("estimated_value",""), data.get("image_url",""), request.user_name,
+             request.user_name if data.get("image_url","") else ""))
         conn.commit()
         cur.close()
         conn.close()
@@ -251,6 +258,9 @@ def update_record(rid):
         allowed = ["artist","album","year","label","format","genre","grade","condition","tracks","notes","estimated_value","image_url"]
         fields = [f"{k}=%s" for k in allowed if k in data]
         values = [data[k] for k in allowed if k in data]
+        if data.get("image_url"):
+            fields.append("photo_uploaded_by=%s")
+            values.append(request.user_name)
         fields.append("updated_at=NOW()")
         values.append(rid)
         cur.execute(f"UPDATE records SET {','.join(fields)} WHERE id=%s", values)
