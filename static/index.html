@@ -193,9 +193,16 @@ var uploadedImageUrl = '';
 var batchQueue = [];
 var batchProcessing = false;
 
+function jsonOrError(res) {
+  return res.json().catch(function() { return {}; }).then(function(data) {
+    if (!res.ok) throw new Error(data.error || ('服務錯誤 ' + res.status));
+    return data;
+  });
+}
+
 function fetchRecords() {
   fetch('/api/records')
-    .then(function(res) { return res.json(); })
+    .then(jsonOrError)
     .then(function(data) { records = data; renderList(); })
     .catch(function() { records = []; renderList(); });
 }
@@ -281,18 +288,18 @@ function handleFileChange(input) {
   var fd = new FormData();
   fd.append('file', file);
   fetch('/api/upload', {method: 'POST', body: fd})
-    .then(function(res) { return res.json(); })
+    .then(jsonOrError)
     .then(function(data) {
       uploadedImageUrl = data.url;
       showAiBar('loading', 'AI 辨識中...');
       return fetch('/api/ai-recognize', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({image_url: uploadedImageUrl})});
     })
-    .then(function(res) { return res.json(); })
+    .then(jsonOrError)
     .then(function(info) {
       fillForm(info);
-      showAiBar('done', 'AI辨識完成，請確認並補充資料');
+      showAiBar('done', info.warning ? ('備援辨識完成：' + info.warning + '，請人工確認') : 'AI辨識完成，請確認並補充資料');
     })
-    .catch(function() { showAiBar('error', '辨識失敗，請手動輸入'); });
+    .catch(function(err) { showAiBar('error', err.message || '辨識失敗，請手動輸入'); });
 }
 
 function fillForm(info) {
@@ -354,10 +361,10 @@ function processBatchQueue() {
     fd.append('file', batchQueue[i].file);
     var idx = i;
     fetch('/api/upload', {method: 'POST', body: fd})
-      .then(function(res) { return res.json(); })
+      .then(jsonOrError)
       .then(function(upData) {
         return fetch('/api/ai-recognize', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({image_url: upData.url})})
-          .then(function(res) { return res.json(); })
+          .then(jsonOrError)
           .then(function(info) {
             var fmt = 'LP (33轉)';
             if (info.format && (info.format.indexOf('SP') !== -1 || info.format.indexOf('78') !== -1)) fmt = 'SP/78轉蟲膠';

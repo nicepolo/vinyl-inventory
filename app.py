@@ -1,9 +1,9 @@
-import os, json, uuid, base64
+import os, json, uuid, base64, time
 from datetime import datetime
 from flask import Flask, request, jsonify, send_from_directory, Response
 from flask_cors import CORS
-import anthropic
 import pg8000
+import requests
 
 app = Flask(__name__, static_folder="static", static_url_path="/static")
 CORS(app)
@@ -11,9 +11,53 @@ CORS(app)
 UPLOAD_FOLDER = "uploads"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
-GOOGLE_VISION_KEY = os.environ.get("GOOGLE_VISION_KEY", "AIzaSyBfIQN6Uvs0wAhezO25OTK-Vx-Uht-yfr8")
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")
+GOOGLE_VISION_KEY = os.environ.get("GOOGLE_VISION_KEY", "")
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
+AI_TIMEOUT_SECONDS = float(os.environ.get("AI_TIMEOUT_SECONDS", "25"))
+
+TRANSIENT_STATUSES = {408, 409, 425, 429, 500, 502, 503, 504}
+
+class ProviderError(Exception):
+    def __init__(self, message, status=503, transient=False):
+        super().__init__(message)
+        self.status = status
+        self.transient = transient
+
+def friendly_provider_error(provider, status, body=""):
+    text = (body or "").lower()
+    if status == 400 and any(word in text for word in ("credit", "balance", "billing")):
+        return ProviderError(f"{provider} 額度不足，已嘗試其他可用辨識方式", 503)
+    if status in (401, 403):
+        return ProviderError(f"{provider} 金鑰無效或沒有權限，請由管理員檢查 Railway 設定", 503)
+    if status == 429:
+        return ProviderError(f"{provider} 目前請求過多，請稍後再試", 503, True)
+    if status in TRANSIENT_STATUSES:
+        return ProviderError(f"{provider} 暫時無法回應，請稍後再試", 503, True)
+    return ProviderError(f"{provider} 辨識服務回應異常（HTTP {status}）", 503)
+
+def post_with_retry(url, **kwargs):
+    last_error = None
+    for attempt in range(2):
+        try:
+            response = requests.post(url, timeout=AI_TIMEOUT_SECONDS, **kwargs)
+            if response.status_code not in TRANSIENT_STATUSES or attempt == 1:
+                return response
+            last_error = friendly_provider_error("AI", response.status_code, response.text[:500])
+        except (requests.Timeout, requests.ConnectionError) as exc:
+            last_error = ProviderError("AI 辨識服務連線逾時，請稍後再試", 503, True)
+            if attempt == 1:
+                raise last_error from exc
+        time.sleep(0.4 * (attempt + 1))
+    raise last_error or ProviderError("AI 辨識服務暫時無法使用", 503)
+
+def parse_json_object(text):
+    cleaned = (text or "").replace("```json", "").replace("```", "").strip()
+    start, end = cleaned.find("{"), cleaned.rfind("}")
+    if start < 0 or end <= start:
+        raise ProviderError("AI 回傳格式不正確，請重試", 502)
+    return json.loads(cleaned[start:end + 1])
 
 def parse_db_url(url):
     # postgresql://user:pass@host:port/dbname
@@ -160,45 +204,81 @@ def serve_upload(filename):
 
 @app.route("/api/ai-recognize", methods=["POST"])
 def ai_recognize():
-    import requests as req
-    data = request.json
+    data = request.get_json(silent=True) or {}
     image_url = data.get("image_url", "")
-    filename = image_url.replace("/uploads/", "")
+    filename = os.path.basename(image_url.replace("/uploads/", ""))
+    if not image_url.startswith("/uploads/") or not filename:
+        return jsonify({"error": "圖片路徑無效"}), 400
     filepath = os.path.join(UPLOAD_FOLDER, filename)
     if not os.path.exists(filepath):
-        return jsonify({"error": "Image not found"}), 404
+        return jsonify({"error": "找不到要辨識的圖片"}), 404
     with open(filepath, "rb") as f:
         image_data = base64.b64encode(f.read()).decode("utf-8")
-    ocr_text = ""
-    try:
-        vision_url = "https://vision.googleapis.com/v1/images:annotate?key=" + GOOGLE_VISION_KEY
-        vision_payload = {"requests": [{"image": {"content": image_data}, "features": [{"type": "TEXT_DETECTION"}, {"type": "LABEL_DETECTION", "maxResults": 10}, {"type": "LOGO_DETECTION", "maxResults": 5}]}]}
-        annotations = req.post(vision_url, json=vision_payload, timeout=15).json().get("responses", [{}])[0]
-        full_text = annotations.get("fullTextAnnotation", {}).get("text", "")
-        labels = [l.get("description","") for l in annotations.get("labelAnnotations", [])]
-        logos = [l.get("description","") for l in annotations.get("logoAnnotations", [])]
-        ocr_text = "OCR\u6587\u5b57\uff1a" + full_text + "\n\u6a19\u7c3a\uff1a" + ",".join(labels) + "\nLogo\uff1a" + ",".join(logos)
-    except Exception as e:
-        ocr_text = "OCR\u5931\u6557"
+    full_text, labels, logos = "", [], []
+    vision_error = None
+    if GOOGLE_VISION_KEY:
+        try:
+            vision_url = "https://vision.googleapis.com/v1/images:annotate?key=" + GOOGLE_VISION_KEY
+            vision_payload = {"requests": [{"image": {"content": image_data}, "features": [{"type": "TEXT_DETECTION"}, {"type": "LABEL_DETECTION", "maxResults": 10}, {"type": "LOGO_DETECTION", "maxResults": 5}]}]}
+            response = post_with_retry(vision_url, json=vision_payload)
+            if not response.ok:
+                raise friendly_provider_error("Google Vision", response.status_code, response.text[:500])
+            annotations = response.json().get("responses", [{}])[0]
+            if annotations.get("error"):
+                err = annotations["error"]
+                raise friendly_provider_error("Google Vision", int(err.get("code", 500)), str(err.get("message", "")))
+            full_text = annotations.get("fullTextAnnotation", {}).get("text", "")
+            labels = [l.get("description", "") for l in annotations.get("labelAnnotations", []) if l.get("description")]
+            logos = [l.get("description", "") for l in annotations.get("logoAnnotations", []) if l.get("description")]
+        except ProviderError as exc:
+            vision_error = exc
+    else:
+        vision_error = ProviderError("尚未設定 Google Vision", 503)
+    ocr_text = "OCR文字：" + full_text[:4000] + "\n標籤：" + ",".join(labels) + "\nLogo：" + ",".join(logos)
     ext2 = filepath.rsplit(".", 1)[-1].lower()
-    media_type = "image/jpeg" if ext2 in ["jpg","jpeg"] else "image/" + ext2
-    prompt = ("\u4f60\u662f\u9ed1\u8a60\u5531\u7247\u5c08\u5bb6\uff0c\u719f\u6089Discogs\u5be6\u969b\u6210\u4ea4\u884c\u60c5\u3002\n"
-              "Google Vision\u8fa8\u8b58\u7d50\u679c\uff1a\n" + ocr_text + "\n\n"
-              "\u8acb\u7528\u7e41\u9ad4\u4e2d\u6587\u5206\u6790\uff0csuggested_grade\u53ea\u80fd\u586bA/B/C\u3002\n"
-              "\u4f30\u50f9\uff1aK-tel\u5408\u8f2fUSD$1-5\uff1b\u4e00\u822cLP USD$2-15\uff1b\u77e5\u540d\u85dd\u4ebaPUSSD$5-50\uff1b\u7a00\u6709USD$20-150\uff1b78\u8f49USD$5-80\u3002\n"
-              "\u6240\u6709\u6b04\u4f4d\u7e41\u9ad4\u4e2d\u6587\u3002\n"
-              '\u53ea\u56de\u50b3JSON: {"artist":"","album":"","year":"","label":"","format":"","genre":"","tracks":"","condition":"","suggested_grade":"","estimated_value":"USD$X-Y\uff08\u7d04NT$X-Y\uff09","notes":""}')
-    message = client.messages.create(
-        model="claude-haiku-4-5-20251001", max_tokens=1024,
-        messages=[{"role":"user","content":[
-            {"type":"image","source":{"type":"base64","media_type":media_type,"data":image_data}},
-            {"type":"text","text":prompt}
-        ]}]
-    )
-    try:
-        return jsonify(json.loads(message.content[0].text.replace("```json","").replace("```","").strip()))
-    except:
-        return jsonify({})
+    media_type = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp", "gif": "image/gif"}.get(ext2, "image/jpeg")
+    prompt = ("你是黑膠唱片入庫助理。根據封面與下列 Google Vision OCR，只填寫照片中可合理辨識的資料；不確定就留空，不可捏造版本、年份、曲目、品相或價格。\n"
+              + ocr_text + "\n\n"
+              "請用繁體中文，只回傳 JSON。suggested_grade 只能是 A、B、C；單張封面無法確認唱片實際品相時用 B，並在 low_confidence 列出 condition 與 suggested_grade。estimated_value 一律留空，除非照片清楚印有售價。\n"
+              '格式：{"artist":"","album":"","year":"","label":"","format":"","genre":"","tracks":"","condition":"","suggested_grade":"B","estimated_value":"","notes":"","low_confidence":[]}')
+    anthropic_error = None
+    if ANTHROPIC_API_KEY:
+        try:
+            response = post_with_retry(
+                "https://api.anthropic.com/v1/messages",
+                headers={"Content-Type": "application/json", "x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01"},
+                json={"model": ANTHROPIC_MODEL, "max_tokens": 1024, "temperature": 0.1, "messages": [{"role": "user", "content": [
+                    {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": image_data}},
+                    {"type": "text", "text": prompt}
+                ]}]}
+            )
+            if not response.ok:
+                raise friendly_provider_error("Anthropic", response.status_code, response.text[:500])
+            payload = response.json()
+            text = "".join(part.get("text", "") for part in payload.get("content", []) if part.get("type") == "text")
+            result = parse_json_object(text)
+            result["_engine"] = "anthropic+google_vision" if (full_text or labels or logos) else "anthropic"
+            return jsonify(result)
+        except (ProviderError, json.JSONDecodeError) as exc:
+            anthropic_error = exc if isinstance(exc, ProviderError) else ProviderError("AI 回傳格式不正確，請重試", 502)
+    else:
+        anthropic_error = ProviderError("尚未設定 Anthropic", 503)
+
+    if full_text or labels or logos:
+        lines = [line.strip() for line in full_text.splitlines() if line.strip()]
+        artist = logos[0] if logos else (lines[0] if lines else "")
+        album = lines[1] if len(lines) > 1 else ""
+        return jsonify({
+            "artist": artist[:120], "album": album[:160], "year": "", "label": "",
+            "format": "", "genre": ", ".join(labels[:3]), "tracks": "", "condition": "待人工確認",
+            "suggested_grade": "B", "estimated_value": "",
+            "notes": "目前使用 Google Vision 備援辨識；請依封面文字人工確認。",
+            "low_confidence": ["artist", "album", "year", "label", "format", "genre", "tracks", "condition", "suggested_grade"],
+            "_engine": "google_vision_fallback", "warning": str(anthropic_error)
+        })
+
+    errors = [str(err) for err in (anthropic_error, vision_error) if err]
+    return jsonify({"error": "辨識暫時無法完成。" + "；".join(errors)}), 503
 
 @app.route("/api/export-csv")
 def export_csv():
