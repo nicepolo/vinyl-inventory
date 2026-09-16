@@ -1,6 +1,6 @@
-import os, json, uuid, base64, time
+import os, json, uuid, base64, time, hmac, hashlib
 from datetime import datetime
-from flask import Flask, request, jsonify, send_from_directory, Response
+from flask import Flask, request, jsonify, send_from_directory, Response, redirect
 from flask_cors import CORS
 import pg8000
 import requests
@@ -19,6 +19,8 @@ GEMINI_FALLBACK_MODEL = os.environ.get("GEMINI_FALLBACK_MODEL", "gemini-2.5-flas
 GOOGLE_VISION_KEY = os.environ.get("GOOGLE_VISION_KEY", "")
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 AI_TIMEOUT_SECONDS = float(os.environ.get("AI_TIMEOUT_SECONDS", "25"))
+UNIFIED_SSO_SECRET = os.environ.get("UNIFIED_SSO_SECRET", "")
+ADMIN_PORTAL_URL = os.environ.get("ADMIN_PORTAL_URL", "https://antique-register-production.up.railway.app").rstrip("/")
 
 TRANSIENT_STATUSES = {408, 409, 425, 429, 500, 502, 503, 504}
 
@@ -143,6 +145,64 @@ def row_to_dict(columns, row):
             val = val.isoformat()
         d[col] = val
     return d
+
+def decode_token(token, audience):
+    try:
+        payload, signature = token.split(".", 1)
+        expected = base64.urlsafe_b64encode(
+            hmac.new(UNIFIED_SSO_SECRET.encode(), payload.encode(), hashlib.sha256).digest()
+        ).decode().rstrip("=")
+        if not UNIFIED_SSO_SECRET or not hmac.compare_digest(signature, expected):
+            return None
+        padded = payload + "=" * (-len(payload) % 4)
+        data = json.loads(base64.urlsafe_b64decode(padded).decode())
+        if data.get("aud") != audience or int(data.get("exp", 0)) < int(time.time()):
+            return None
+        return data
+    except (ValueError, TypeError, json.JSONDecodeError):
+        return None
+
+def issue_session(name):
+    data = {"name": name, "aud": "vinyl-session", "exp": int(time.time()) + 30 * 24 * 3600}
+    payload = base64.urlsafe_b64encode(json.dumps(data, separators=(",", ":")).encode()).decode().rstrip("=")
+    signature = base64.urlsafe_b64encode(
+        hmac.new(UNIFIED_SSO_SECRET.encode(), payload.encode(), hashlib.sha256).digest()
+    ).decode().rstrip("=")
+    return f"{payload}.{signature}"
+
+@app.before_request
+def require_unified_login():
+    if request.method == "OPTIONS" or request.path in ("/sso", "/healthz"):
+        return None
+    session = decode_token(request.cookies.get("vinyl_session", ""), "vinyl-session")
+    if session:
+        request.user_name = session.get("name", "管理員")
+        return None
+    if request.path.startswith("/api/") or request.path.startswith("/uploads/"):
+        return jsonify({"error": "請從萬鴻統一管理入口登入"}), 401
+    return redirect(ADMIN_PORTAL_URL)
+
+@app.route("/sso")
+def sso_login():
+    data = decode_token(request.args.get("token", ""), "vinyl-sso")
+    if not data:
+        return redirect(ADMIN_PORTAL_URL)
+    response = redirect("/")
+    response.set_cookie(
+        "vinyl_session", issue_session(data.get("name", "管理員")),
+        max_age=30 * 24 * 3600, httponly=True, secure=True, samesite="Lax"
+    )
+    return response
+
+@app.route("/logout")
+def logout():
+    response = redirect(ADMIN_PORTAL_URL)
+    response.delete_cookie("vinyl_session")
+    return response
+
+@app.route("/healthz")
+def healthz():
+    return jsonify({"ok": True})
 
 @app.route("/")
 def index():

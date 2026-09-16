@@ -10,6 +10,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 .header { background: #1a1a2e; color: #fff; padding: 14px 16px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 100; }
 .header h1 { font-size: 17px; font-weight: 700; }
 .icon-btn { background: rgba(255,255,255,0.15); border: none; color: #fff; padding: 6px 10px; border-radius: 8px; cursor: pointer; font-size: 15px; }
+.header-actions { display: flex; align-items: center; gap: 6px; }
+.header-link { text-decoration: none; font-size: 13px; }
 .filter-bar { background: #fff; padding: 10px 12px; border-bottom: 1px solid #eee; }
 .search-input { width: 100%; padding: 8px 12px; border: 1.5px solid #E5E7EB; border-radius: 10px; font-size: 14px; outline: none; }
 .grade-filters { display: flex; gap: 6px; margin-top: 8px; }
@@ -92,7 +94,11 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 <div id="main-view">
   <div class="header">
     <h1>&#127925; 黑膠庫存管理</h1>
-    <button class="icon-btn" onclick="showStats()">&#128202;</button>
+    <div class="header-actions">
+      <a class="icon-btn header-link" href="https://antique-register-production.up.railway.app/portal.html">統一入口</a>
+      <button class="icon-btn" onclick="showStats()">&#128202;</button>
+      <a class="icon-btn header-link" href="/logout">登出</a>
+    </div>
   </div>
   <div class="filter-bar">
     <input class="search-input" id="search-input" placeholder="搜尋藝人 / 專輯 / 廠牌..." oninput="renderList()">
