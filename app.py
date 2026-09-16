@@ -15,6 +15,7 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
+GEMINI_FALLBACK_MODEL = os.environ.get("GEMINI_FALLBACK_MODEL", "gemini-2.5-flash")
 GOOGLE_VISION_KEY = os.environ.get("GOOGLE_VISION_KEY", "")
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 AI_TIMEOUT_SECONDS = float(os.environ.get("AI_TIMEOUT_SECONDS", "25"))
@@ -62,21 +63,28 @@ def parse_json_object(text):
     return json.loads(cleaned[start:end + 1])
 
 def recognize_with_gemini(image_data, media_type, prompt):
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
-    response = post_with_retry(url, json={
-        "contents": [{"parts": [
-            {"inline_data": {"mime_type": media_type, "data": image_data}},
-            {"text": prompt}
-        ]}],
-        "generationConfig": {"responseMimeType": "application/json", "maxOutputTokens": 1600}
-    })
-    if not response.ok:
-        raise friendly_provider_error("Gemini", response.status_code, response.text[:500])
-    payload = response.json()
-    text = "".join(part.get("text", "") for part in payload.get("candidates", [{}])[0].get("content", {}).get("parts", []))
-    if not text:
-        raise ProviderError("Gemini 沒有回傳可用內容，可能被安全過濾擋下", 502)
-    return parse_json_object(text)
+    last_error = None
+    models = list(dict.fromkeys(model for model in (GEMINI_MODEL, GEMINI_FALLBACK_MODEL) if model))
+    for model in models:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}"
+        response = post_with_retry(url, json={
+            "contents": [{"parts": [
+                {"inline_data": {"mime_type": media_type, "data": image_data}},
+                {"text": prompt}
+            ]}],
+            "generationConfig": {"responseMimeType": "application/json", "maxOutputTokens": 1600}
+        })
+        if not response.ok:
+            last_error = friendly_provider_error(f"Gemini {model}", response.status_code, response.text[:500])
+            if last_error.transient and model != models[-1]:
+                continue
+            raise last_error
+        payload = response.json()
+        text = "".join(part.get("text", "") for part in payload.get("candidates", [{}])[0].get("content", {}).get("parts", []))
+        if not text:
+            raise ProviderError(f"Gemini {model} 沒有回傳可用內容，可能被安全過濾擋下", 502)
+        return parse_json_object(text), model
+    raise last_error or ProviderError("Gemini 暫時無法使用", 503)
 
 def parse_db_url(url):
     # postgresql://user:pass@host:port/dbname
@@ -275,11 +283,12 @@ def ai_recognize():
     gemini_error = None
     if GEMINI_API_KEY:
         try:
-            result = recognize_with_gemini(image_data, media_type, prompt)
+            result, gemini_model = recognize_with_gemini(image_data, media_type, prompt)
             if result.get("suggested_grade") not in ("A", "B", "C"):
                 result["suggested_grade"] = "B"
             result["estimated_value"] = ""
             result["_engine"] = "gemini+google_vision" if (full_text or labels or logos) else "gemini"
+            result["_model"] = gemini_model
             return jsonify(result)
         except (ProviderError, json.JSONDecodeError, KeyError, IndexError) as exc:
             gemini_error = exc if isinstance(exc, ProviderError) else ProviderError("Gemini 回傳格式不正確，已改用備援服務", 502)
