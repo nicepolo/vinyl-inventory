@@ -44,6 +44,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 .tag-C { background: #F3F4F6; color: #6B7280; }
 .tag-fmt { background: #F3F4F6; color: #6B7280; }
 .chevron { color: #D1D5DB; font-size: 18px; }
+.share-mini { border: 1px solid #c7c9d4; background: #fff; color: #3730a3; border-radius: 7px; padding: 5px 7px; font-size: 11px; cursor: pointer; }
 .empty { text-align: center; padding: 60px 20px; color: #9CA3AF; }
 .empty .emoji { font-size: 48px; margin-bottom: 12px; }
 .fab { position: fixed; bottom: 24px; right: 24px; width: 56px; height: 56px; border-radius: 50%; background: #1a1a2e; color: #fff; font-size: 28px; border: none; cursor: pointer; box-shadow: 0 4px 16px rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center; z-index: 200; }
@@ -265,7 +266,7 @@ function renderList() {
       '<span class="tag tag-' + r.grade + '">' + (gradeLabel[r.grade] || r.grade) + '</span>' +
       '<span class="tag tag-fmt">' + (r.format || '').replace(' (33轉)', '').replace('/78轉蟲膠', '') + '</span>' +
       (r.year ? '<span class="tag tag-fmt">' + r.year + '</span>' : '') +
-      '</div></div><div class="chevron">›</div></div>';
+      '</div></div><button class="share-mini" onclick="event.stopPropagation();shareOne(\'' + r.id + '\')">分享</button><div class="chevron">›</div></div>';
   }).join('');
 }
 
@@ -531,6 +532,11 @@ function showStats() {
   }).join('') + '</div>';
   html += '<a href="/api/export-csv" class="export-btn">匯出 CSV</a>';
   html += '<button class="export-btn" style="background:#7C3AED" onclick="bilingualizeRecords()">補齊中英文名稱</button>';
+  html += '<div class="detail-card"><div class="section-label">建立客戶分享</div>' +
+    '<input id="share-title" placeholder="展示標題，例如 爵士黑膠精選" style="width:100%;padding:10px;margin:6px 0;border:1px solid #d1d5db;border-radius:8px">' +
+    '<select id="share-filter" style="width:100%;padding:10px;margin-bottom:6px;border:1px solid #d1d5db;border-radius:8px"><option value="grade|A">A級</option><option value="grade|B">B級</option><option value="grade|C">C級</option><option value="format|LP (33轉)">LP (33轉)</option><option value="format|SP/78轉蟲膠">SP/78轉蟲膠</option><option value="format|EP (45轉)">EP (45轉)</option></select>' +
+    '<input id="share-days" type="number" min="1" max="365" value="30" style="width:100%;padding:10px;margin-bottom:8px;border:1px solid #d1d5db;border-radius:8px" aria-label="有效天數">' +
+    '<button class="export-btn" style="background:#1a1a2e;margin:0" onclick="shareCategory()">產生免登入連結</button></div><div id="share-list"></div>';
   html += '<div class="detail-card"><div class="section-label">各格式分佈</div>';
   ['LP (33轉)', 'SP/78轉蟲膠', 'EP (45轉)', '其他'].forEach(function(f) {
     var cnt = records.filter(function(r) { return r.format === f; }).length;
@@ -539,6 +545,42 @@ function showStats() {
   html += '</div>';
   document.getElementById('stats-body').innerHTML = html;
   document.getElementById('stats-panel').classList.add('open');
+  loadShares();
+}
+
+function createShare(payload) {
+  return fetch('/api/shares', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})
+    .then(jsonOrError).then(function(result) {
+      var url = location.origin + result.url;
+      if (navigator.clipboard) navigator.clipboard.writeText(url).catch(function() {});
+      window.prompt('客戶免登入分享連結（已嘗試複製）', url);
+      loadShares();
+      return result;
+    });
+}
+
+function shareOne(id) {
+  var record = records.find(function(r){return r.id===id;});
+  createShare({filter_type:'ids',record_ids:[id],title:(record&&record.album)||'萬鴻黑膠精選',expires_days:30})
+    .catch(function(err){showToast(err.message||'建立分享失敗','error');});
+}
+
+function shareCategory() {
+  var parts = document.getElementById('share-filter').value.split('|');
+  createShare({filter_type:parts[0],filter_value:parts.slice(1).join('|'),title:document.getElementById('share-title').value||('萬鴻'+parts.slice(1).join('|')+'精選'),expires_days:document.getElementById('share-days').value})
+    .catch(function(err){showToast(err.message||'建立分享失敗','error');});
+}
+
+function loadShares() {
+  var box=document.getElementById('share-list'); if(!box)return;
+  fetch('/api/shares').then(jsonOrError).then(function(shares){
+    box.innerHTML=shares.length?'<div class="section-label" style="margin:14px 0 6px">已建立連結</div>'+shares.map(function(s){return '<div class="detail-card" style="display:flex;justify-content:space-between;gap:8px;align-items:center"><div style="min-width:0;font-size:12px"><b>'+escapeHtml(s.title||'客戶分享')+'</b><br><span style="color:#6b7280">到期 '+String(s.expires_at||'').slice(0,10)+'</span></div><button class="danger-btn" onclick="revokeShare(\''+s.token+'\')">撤銷</button></div>';}).join(''):'';
+  }).catch(function(){});
+}
+
+function revokeShare(token) {
+  if(!confirm('撤銷後客戶將無法再開啟此連結，確定嗎？'))return;
+  fetch('/api/shares/'+token,{method:'DELETE'}).then(jsonOrError).then(loadShares);
 }
 
 function bilingualizeRecords() {

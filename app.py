@@ -186,6 +186,18 @@ def init_db():
             created_at TIMESTAMP DEFAULT NOW()
         )
     """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS public_shares (
+            token TEXT PRIMARY KEY,
+            title TEXT DEFAULT '',
+            filter_type TEXT NOT NULL,
+            filter_value TEXT DEFAULT '',
+            record_ids TEXT DEFAULT '[]',
+            expires_at TIMESTAMP NOT NULL,
+            created_by TEXT DEFAULT '',
+            created_at TIMESTAMP DEFAULT NOW()
+        )
+    """)
     conn.commit()
     cur.close()
     conn.close()
@@ -231,7 +243,9 @@ def issue_session(name):
 
 @app.before_request
 def require_unified_login():
-    if request.method == "OPTIONS" or request.path in ("/sso", "/healthz"):
+    if (request.method == "OPTIONS" or request.path in ("/sso", "/healthz")
+            or request.path.startswith("/share/") or request.path.startswith("/api/public/share/")
+            or request.path.startswith("/uploads/") or request.path.startswith("/static/")):
         return None
     session = decode_token(request.cookies.get("vinyl_session", ""), "vinyl-session")
     if session:
@@ -267,6 +281,10 @@ def healthz():
 def index():
     return send_from_directory("static", "index.html")
 
+@app.route("/share/<token>")
+def public_share_page(token):
+    return send_from_directory("static", "share.html")
+
 @app.route("/api/records", methods=["GET"])
 def get_records():
     try:
@@ -280,6 +298,83 @@ def get_records():
         return jsonify(rows)
     except Exception as e:
         return jsonify([])
+
+@app.route("/api/shares", methods=["POST"])
+def create_public_share():
+    data = request.get_json(silent=True) or {}
+    filter_type = data.get("filter_type", "")
+    record_ids = [str(x) for x in data.get("record_ids", []) if x][:200]
+    filter_value = str(data.get("filter_value", "") or "")
+    if filter_type == "ids" and not record_ids:
+        return jsonify({"error": "請選擇要分享的唱片"}), 400
+    if filter_type in ("grade", "format") and not filter_value:
+        return jsonify({"error": "請選擇分享種類"}), 400
+    if filter_type not in ("ids", "grade", "format"):
+        return jsonify({"error": "分享方式不正確"}), 400
+    days = min(365, max(1, int(data.get("expires_days", 30) or 30)))
+    token = uuid.uuid4().hex
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""INSERT INTO public_shares
+        (token,title,filter_type,filter_value,record_ids,expires_at,created_by)
+        VALUES (%s,%s,%s,%s,%s,NOW()+(%s || ' days')::interval,%s)""",
+        (token, str(data.get("title", "") or ""), filter_type, filter_value,
+         json.dumps(record_ids), str(days), request.user_name))
+    conn.commit()
+    cur.close()
+    conn.close()
+    return jsonify({"token": token, "url": "/share/" + token})
+
+@app.route("/api/shares", methods=["GET"])
+def list_public_shares():
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT token,title,filter_type,filter_value,expires_at,created_by,created_at FROM public_shares ORDER BY created_at DESC")
+    cols = ["token","title","filter_type","filter_value","expires_at","created_by","created_at"]
+    rows = [row_to_dict(cols, row) for row in cur.fetchall()]
+    cur.close()
+    conn.close()
+    return jsonify(rows)
+
+@app.route("/api/shares/<token>", methods=["DELETE"])
+def revoke_public_share(token):
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM public_shares WHERE token=%s", (token,))
+    conn.commit()
+    cur.close()
+    conn.close()
+    return jsonify({"ok": True})
+
+@app.route("/api/public/share/<token>")
+def get_public_share(token):
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT title,filter_type,filter_value,record_ids,expires_at FROM public_shares WHERE token=%s AND expires_at>NOW()", (token,))
+    share = cur.fetchone()
+    if not share:
+        cur.close(); conn.close()
+        return jsonify({"error": "連結無效、已到期或已撤銷"}), 404
+    title, filter_type, filter_value, record_ids_json, expires_at = share
+    columns = "id,artist,album,year,label,format,genre,grade,condition,tracks,image_url,photo_uploaded_by"
+    if filter_type == "ids":
+        ids = json.loads(record_ids_json or "[]")
+        if not ids:
+            rows = []
+        else:
+            placeholders = ",".join(["%s"] * len(ids))
+            cur.execute(f"SELECT {columns} FROM records WHERE id IN ({placeholders}) ORDER BY created_at DESC", tuple(ids))
+            rows = cur.fetchall()
+    elif filter_type == "grade":
+        cur.execute(f"SELECT {columns} FROM records WHERE grade=%s ORDER BY created_at DESC", (filter_value,))
+        rows = cur.fetchall()
+    else:
+        cur.execute(f"SELECT {columns} FROM records WHERE format=%s ORDER BY created_at DESC", (filter_value,))
+        rows = cur.fetchall()
+    cols = ["id","artist","album","year","label","format","genre","grade","condition","tracks","image_url","photo_uploaded_by"]
+    records = [row_to_dict(cols, row) for row in rows]
+    cur.close(); conn.close()
+    return jsonify({"meta": {"title": title or "萬鴻黑膠精選", "expires_at": expires_at.isoformat()}, "records": records})
 
 @app.route("/api/records", methods=["POST"])
 def add_record():
