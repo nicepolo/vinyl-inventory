@@ -66,7 +66,7 @@ def post_with_retry(url, **kwargs):
     last_error = None
     for attempt in range(2):
         try:
-            response = requests.post(url, timeout=AI_TIMEOUT_SECONDS, **kwargs)
+            response = requests.post(url, timeout=min(AI_TIMEOUT_SECONDS, 18), **kwargs)
             if response.status_code not in TRANSIENT_STATUSES or attempt == 1:
                 return response
             last_error = friendly_provider_error("AI", response.status_code, response.text[:500])
@@ -125,8 +125,8 @@ def available_gemini_models():
     if discovered:
         ordered = [model for model in preferred if model in discovered]
         ordered.extend(model for model in discovered if model not in ordered)
-        return list(dict.fromkeys(ordered))
-    return list(dict.fromkeys(model for model in preferred if model))
+        return list(dict.fromkeys(ordered))[:2]
+    return list(dict.fromkeys(model for model in preferred if model))[:2]
 
 def gemini_generation_request(model, parts, generation_config, safety_settings=None):
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}"
@@ -134,11 +134,12 @@ def gemini_generation_request(model, parts, generation_config, safety_settings=N
     if safety_settings:
         payload["safetySettings"] = safety_settings
     response = post_with_retry(url, json=payload)
-    # Some older models accept JSON mode but not responseSchema. Retry that model
-    # without the schema before moving to a different model.
-    if response.status_code == 400 and "responseSchema" in generation_config:
+    # Some older models accept JSON mode but not schema/thinking options. Retry
+    # a lean compatible request before moving to a different model.
+    if response.status_code == 400 and ("responseSchema" in generation_config or "thinkingConfig" in generation_config):
         compatible_config = dict(generation_config)
         compatible_config.pop("responseSchema", None)
+        compatible_config.pop("thinkingConfig", None)
         payload["generationConfig"] = compatible_config
         response = post_with_retry(url, json=payload)
     return response
@@ -154,7 +155,8 @@ def recognize_with_gemini(image_data, media_type, prompt):
             "responseMimeType": "application/json",
             "responseSchema": VINYL_RESPONSE_SCHEMA,
             "maxOutputTokens": 3000,
-            "temperature": 0.1
+            "temperature": 0.1,
+            "thinkingConfig": {"thinkingBudget": 0}
         }, [
             {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_ONLY_HIGH"},
             {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_ONLY_HIGH"},
@@ -195,7 +197,8 @@ def text_json_with_gemini(prompt, response_schema=None):
         generation_config = {
             "responseMimeType": "application/json",
             "maxOutputTokens": 3000,
-            "temperature": 0.1
+            "temperature": 0.1,
+            "thinkingConfig": {"thinkingBudget": 0}
         }
         if response_schema:
             generation_config["responseSchema"] = response_schema
