@@ -96,29 +96,71 @@ def apply_bilingual_names(result):
     result["album"] = combine("album")
     return result
 
+def available_gemini_models():
+    """Return models this exact API key can call instead of assuming account availability."""
+    discovered = []
+    try:
+        response = requests.get(
+            "https://generativelanguage.googleapis.com/v1beta/models",
+            params={"key": GEMINI_API_KEY, "pageSize": 100},
+            timeout=AI_TIMEOUT_SECONDS
+        )
+        if response.ok:
+            for item in response.json().get("models", []):
+                methods = item.get("supportedGenerationMethods") or []
+                name = str(item.get("name", "")).replace("models/", "", 1)
+                if name and "generateContent" in methods and "flash" in name and "image" not in name:
+                    discovered.append(name)
+    except (requests.RequestException, ValueError):
+        pass
+
+    preferred = [
+        GEMINI_MODEL,
+        "gemini-2.5-flash",
+        "gemini-2.0-flash",
+        GEMINI_FALLBACK_MODEL,
+        "gemini-2.5-flash-lite",
+        "gemini-1.5-flash"
+    ]
+    if discovered:
+        ordered = [model for model in preferred if model in discovered]
+        ordered.extend(model for model in discovered if model not in ordered)
+        return list(dict.fromkeys(ordered))
+    return list(dict.fromkeys(model for model in preferred if model))
+
+def gemini_generation_request(model, parts, generation_config, safety_settings=None):
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}"
+    payload = {"contents": [{"parts": parts}], "generationConfig": generation_config}
+    if safety_settings:
+        payload["safetySettings"] = safety_settings
+    response = post_with_retry(url, json=payload)
+    # Some older models accept JSON mode but not responseSchema. Retry that model
+    # without the schema before moving to a different model.
+    if response.status_code == 400 and "responseSchema" in generation_config:
+        compatible_config = dict(generation_config)
+        compatible_config.pop("responseSchema", None)
+        payload["generationConfig"] = compatible_config
+        response = post_with_retry(url, json=payload)
+    return response
+
 def recognize_with_gemini(image_data, media_type, prompt):
     last_error = None
-    models = list(dict.fromkeys(model for model in (GEMINI_MODEL, GEMINI_FALLBACK_MODEL) if model))
+    models = available_gemini_models()
     for model in models:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}"
-        response = post_with_retry(url, json={
-            "contents": [{"parts": [
-                {"inline_data": {"mime_type": media_type, "data": image_data}},
-                {"text": prompt}
-            ]}],
-            "generationConfig": {
-                "responseMimeType": "application/json",
-                "responseSchema": VINYL_RESPONSE_SCHEMA,
-                "maxOutputTokens": 3000,
-                "temperature": 0.1
-            },
-            "safetySettings": [
-                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_ONLY_HIGH"},
-                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_ONLY_HIGH"},
-                {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_ONLY_HIGH"},
-                {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_ONLY_HIGH"}
-            ]
-        })
+        response = gemini_generation_request(model, [
+            {"inline_data": {"mime_type": media_type, "data": image_data}},
+            {"text": prompt}
+        ], {
+            "responseMimeType": "application/json",
+            "responseSchema": VINYL_RESPONSE_SCHEMA,
+            "maxOutputTokens": 3000,
+            "temperature": 0.1
+        }, [
+            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_ONLY_HIGH"},
+            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_ONLY_HIGH"},
+            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_ONLY_HIGH"},
+            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_ONLY_HIGH"}
+        ])
         if not response.ok:
             last_error = friendly_provider_error(f"Gemini {model}", response.status_code, response.text[:500])
             if model != models[-1] and response.status_code not in (401, 403):
@@ -148,9 +190,8 @@ def recognize_with_gemini(image_data, media_type, prompt):
 
 def text_json_with_gemini(prompt, response_schema=None):
     last_error = None
-    models = list(dict.fromkeys(model for model in (GEMINI_MODEL, GEMINI_FALLBACK_MODEL) if model))
+    models = available_gemini_models()
     for model in models:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}"
         generation_config = {
             "responseMimeType": "application/json",
             "maxOutputTokens": 3000,
@@ -158,10 +199,7 @@ def text_json_with_gemini(prompt, response_schema=None):
         }
         if response_schema:
             generation_config["responseSchema"] = response_schema
-        response = post_with_retry(url, json={
-            "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": generation_config
-        })
+        response = gemini_generation_request(model, [{"text": prompt}], generation_config)
         if not response.ok:
             last_error = friendly_provider_error(f"Gemini {model}", response.status_code, response.text[:500])
             if model != models[-1] and response.status_code not in (401, 403):
