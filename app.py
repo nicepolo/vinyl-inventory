@@ -144,6 +144,7 @@ def gemini_generation_request(model, parts, generation_config, safety_settings=N
             compatible_config.pop("responseSchema", None)
             compatible_config.pop("thinkingConfig", None)
             payload["generationConfig"] = compatible_config
+            payload.pop("safetySettings", None)
             response = post_with_retry(url, json=payload)
         last_response = response
         if response.status_code != 404:
