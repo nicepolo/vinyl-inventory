@@ -11,8 +11,8 @@ CORS(app)
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
-GEMINI_FALLBACK_MODEL = os.environ.get("GEMINI_FALLBACK_MODEL", "gemini-2.5-flash")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_FALLBACK_MODEL = os.environ.get("GEMINI_FALLBACK_MODEL", "gemini-2.5-flash-lite")
 GOOGLE_VISION_KEY = os.environ.get("GOOGLE_VISION_KEY", "")
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 AI_TIMEOUT_SECONDS = float(os.environ.get("AI_TIMEOUT_SECONDS", "25"))
@@ -20,6 +20,29 @@ UNIFIED_SSO_SECRET = os.environ.get("UNIFIED_SSO_SECRET", "")
 ADMIN_PORTAL_URL = os.environ.get("ADMIN_PORTAL_URL", "https://antique-register-production.up.railway.app").rstrip("/")
 
 TRANSIENT_STATUSES = {408, 409, 425, 429, 500, 502, 503, 504}
+
+VINYL_RESPONSE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "artist_zh": {"type": "string"},
+        "artist_original": {"type": "string"},
+        "album_zh": {"type": "string"},
+        "album_original": {"type": "string"},
+        "artist": {"type": "string"},
+        "album": {"type": "string"},
+        "year": {"type": "string"},
+        "label": {"type": "string"},
+        "format": {"type": "string"},
+        "genre": {"type": "string"},
+        "tracks": {"type": "string"},
+        "condition": {"type": "string"},
+        "suggested_grade": {"type": "string", "enum": ["A", "B", "C"]},
+        "estimated_value": {"type": "string"},
+        "notes": {"type": "string"},
+        "low_confidence": {"type": "array", "items": {"type": "string"}}
+    },
+    "required": ["artist_zh", "artist_original", "album_zh", "album_original", "suggested_grade", "low_confidence"]
+}
 
 class ProviderError(Exception):
     def __init__(self, message, status=503, transient=False):
@@ -83,7 +106,12 @@ def recognize_with_gemini(image_data, media_type, prompt):
                 {"inline_data": {"mime_type": media_type, "data": image_data}},
                 {"text": prompt}
             ]}],
-            "generationConfig": {"responseMimeType": "application/json", "maxOutputTokens": 1800, "temperature": 0.1},
+            "generationConfig": {
+                "responseMimeType": "application/json",
+                "responseSchema": VINYL_RESPONSE_SCHEMA,
+                "maxOutputTokens": 3000,
+                "temperature": 0.1
+            },
             "safetySettings": [
                 {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_ONLY_HIGH"},
                 {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_ONLY_HIGH"},
@@ -118,14 +146,21 @@ def recognize_with_gemini(image_data, media_type, prompt):
             raise last_error
     raise last_error or ProviderError("Gemini 暫時無法使用", 503)
 
-def text_json_with_gemini(prompt):
+def text_json_with_gemini(prompt, response_schema=None):
     last_error = None
     models = list(dict.fromkeys(model for model in (GEMINI_MODEL, GEMINI_FALLBACK_MODEL) if model))
     for model in models:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}"
+        generation_config = {
+            "responseMimeType": "application/json",
+            "maxOutputTokens": 3000,
+            "temperature": 0.1
+        }
+        if response_schema:
+            generation_config["responseSchema"] = response_schema
         response = post_with_retry(url, json={
             "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {"responseMimeType": "application/json", "maxOutputTokens": 2200, "temperature": 0.1}
+            "generationConfig": generation_config
         })
         if not response.ok:
             last_error = friendly_provider_error(f"Gemini {model}", response.status_code, response.text[:500])
@@ -553,7 +588,7 @@ def ai_recognize():
         image_data = base64.b64encode(bytes(row[1])).decode("utf-8")
     full_text, labels, logos = "", [], []
     vision_error = None
-    if GOOGLE_VISION_KEY and not GEMINI_API_KEY:
+    if GOOGLE_VISION_KEY:
         try:
             vision_url = "https://vision.googleapis.com/v1/images:annotate?key=" + GOOGLE_VISION_KEY
             vision_payload = {"requests": [{"image": {"content": image_data}, "features": [{"type": "TEXT_DETECTION"}, {"type": "LABEL_DETECTION", "maxResults": 10}, {"type": "LOGO_DETECTION", "maxResults": 5}]}]}
@@ -589,6 +624,21 @@ def ai_recognize():
             return jsonify(result)
         except (ProviderError, json.JSONDecodeError, KeyError, IndexError) as exc:
             gemini_error = exc if isinstance(exc, ProviderError) else ProviderError("Gemini 回傳格式不正確，已改用備援服務", 502)
+            if full_text or labels or logos:
+                try:
+                    rescue_prompt = (prompt + "\n\n圖片模型未能完成結構化輸出。請以以上 Google Vision OCR 為主要證據重新整理；"
+                                     "特別注意封面上最大的藝人、專輯與唱片公司文字。仍然只回傳指定 JSON。")
+                    result, gemini_model = text_json_with_gemini(rescue_prompt, VINYL_RESPONSE_SCHEMA)
+                    result = apply_bilingual_names(result)
+                    if result.get("suggested_grade") not in ("A", "B", "C"):
+                        result["suggested_grade"] = "B"
+                    result["estimated_value"] = ""
+                    result["_engine"] = "google_vision+gemini_ocr_rescue"
+                    result["_model"] = gemini_model
+                    result["warning"] = "已使用封面文字補強辨識，請確認年份與版本"
+                    return jsonify(result)
+                except (ProviderError, json.JSONDecodeError, KeyError, IndexError) as rescue_exc:
+                    gemini_error = rescue_exc if isinstance(rescue_exc, ProviderError) else gemini_error
     else:
         gemini_error = ProviderError("尚未設定 Gemini", 503)
 

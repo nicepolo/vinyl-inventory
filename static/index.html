@@ -32,7 +32,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 .record-list { padding-bottom: 100px; }
 .record-row { display: flex; align-items: center; gap: 12px; padding: 12px 16px; background: #fff; border-bottom: 1px solid #F3F4F6; cursor: pointer; }
 .thumb { position: relative; width: 56px; height: 56px; border-radius: 8px; flex-shrink: 0; background: #F3F4F6; display: flex; align-items: center; justify-content: center; font-size: 24px; overflow: hidden; }
-.thumb img { width: 100%; height: 100%; object-fit: cover; }
+.thumb img { width: 100%; height: 100%; object-fit: cover; cursor: zoom-in; }
 .uploader-badge { position: absolute; right: 3px; bottom: 3px; max-width: 50px; padding: 1px 4px; border-radius: 4px; background: rgba(17,24,39,.78); color: #fff; font-size: 8px; line-height: 1.35; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .record-info { flex: 1; min-width: 0; }
 .record-artist { font-weight: 700; font-size: 15px; color: #1F2937; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -81,7 +81,12 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 .save-btn { width: 100%; padding: 14px; background: #1a1a2e; color: #fff; border: none; border-radius: 12px; font-size: 16px; font-weight: 700; cursor: pointer; margin-top: 8px; }
 .save-btn:disabled { opacity: 0.5; }
 .detail-body { padding: 16px 16px 40px; }
-.detail-photo { position: relative; margin-bottom: 14px; }.detail-img { width: 100%; border-radius: 12px; max-height: 240px; object-fit: cover; display: block; }.detail-uploader { right: 8px; bottom: 8px; max-width: 180px; padding: 4px 8px; font-size: 11px; }
+.detail-photo { position: relative; margin-bottom: 14px; }.detail-img { width: 100%; border-radius: 12px; max-height: 240px; object-fit: cover; display: block; cursor: zoom-in; }.detail-uploader { right: 8px; bottom: 8px; max-width: 180px; padding: 4px 8px; font-size: 11px; }
+.image-viewer { position: fixed; inset: 0; z-index: 10000; background: rgba(0,0,0,.94); display: none; align-items: center; justify-content: center; padding: 52px 12px 20px; }
+.image-viewer.open { display: flex; }
+.image-viewer img { max-width: 100%; max-height: 100%; object-fit: contain; touch-action: pinch-zoom; }
+.image-viewer-close { position: absolute; top: 10px; right: 12px; width: 42px; height: 42px; border: 1px solid rgba(255,255,255,.45); border-radius: 50%; background: rgba(0,0,0,.55); color: #fff; font-size: 28px; line-height: 38px; cursor: pointer; }
+.image-viewer-hint { position: absolute; top: 18px; left: 16px; color: #fff; font-size: 13px; opacity: .8; }
 .detail-card { background: #fff; border-radius: 12px; padding: 14px; margin-bottom: 10px; }
 .detail-artist { font-size: 22px; font-weight: 800; color: #1F2937; }
 .detail-album { font-size: 16px; color: #6B7280; margin-top: 4px; }
@@ -141,7 +146,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
         <div style="font-size:40px">&#128191;</div>
         <div style="margin-top:8px;font-size:14px">單張拍照辨識</div>
       </div>
-      <img id="preview-img" style="display:none;width:100%;height:100%;object-fit:cover;" alt="preview">
+      <img id="preview-img" style="display:none;width:100%;height:100%;object-fit:cover;cursor:zoom-in" alt="preview" onclick="openPreviewImage()">
     </div>
     <label class="upload-btn-label" for="file-input">&#128247; 單張拍照 / 選取（AI辨識）</label>
     <input type="file" id="file-input" accept="image/*" style="display:none" onchange="handleFileChange(this)">
@@ -202,6 +207,11 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 </div>
 
 <div class="toast" id="toast"></div>
+<div class="image-viewer" id="image-viewer" onclick="closeImageViewer()" role="dialog" aria-modal="true" aria-label="放大封面">
+  <div class="image-viewer-hint">雙指可縮放</div>
+  <button class="image-viewer-close" onclick="event.stopPropagation();closeImageViewer()" aria-label="關閉">×</button>
+  <img id="image-viewer-img" alt="放大封面" onclick="event.stopPropagation()">
+</div>
 
 <script>
 var records = [];
@@ -238,6 +248,29 @@ function photoError(img) {
   box.title = '舊封面檔案已遺失，請重新上傳';
 }
 
+function openImageViewer(url) {
+  if (!url) return;
+  document.getElementById('image-viewer-img').src = url;
+  document.getElementById('image-viewer').classList.add('open');
+  document.body.style.overflow = 'hidden';
+}
+
+function closeImageViewer() {
+  document.getElementById('image-viewer').classList.remove('open');
+  document.getElementById('image-viewer-img').src = '';
+  document.body.style.overflow = '';
+}
+
+function openRecordImage(id) {
+  var record = records.find(function(r) { return r.id === id; });
+  if (record && record.image_url) openImageViewer(record.image_url);
+}
+
+function openPreviewImage() {
+  var preview = document.getElementById('preview-img');
+  if (preview.src && preview.style.display !== 'none') openImageViewer(preview.src);
+}
+
 function getFiltered() {
   var q = document.getElementById('search-input').value.toLowerCase();
   return records.filter(function(r) {
@@ -258,7 +291,7 @@ function renderList() {
   var gradeLabel = {A: 'A級', B: 'B級', C: 'C級'};
   el.innerHTML = filtered.map(function(r) {
     return '<div class="record-row" onclick="showDetail(\'' + r.id + '\')">' +
-      '<div class="thumb">' + (r.image_url ? '<img src="' + r.image_url + '" onerror="photoError(this)">' + '<span class="uploader-badge">' + escapeHtml(r.photo_uploaded_by || '未知') + '</span>' : '&#127925;') + '</div>' +
+      '<div class="thumb">' + (r.image_url ? '<img src="' + r.image_url + '" onclick="event.stopPropagation();openRecordImage(\'' + r.id + '\')" onerror="photoError(this)">' + '<span class="uploader-badge">' + escapeHtml(r.photo_uploaded_by || '未知') + '</span>' : '&#127925;') + '</div>' +
       '<div class="record-info">' +
       '<div class="record-artist">' + (r.artist || '未知藝人') + '</div>' +
       '<div class="record-album">' + (r.album || '未知專輯') + '</div>' +
@@ -453,7 +486,7 @@ function showDetail(id) {
   var gc = {A: '#D97706', B: '#1D4ED8', C: '#6B7280'};
   var gb = {A: '#FEF3C7', B: '#DBEAFE', C: '#F3F4F6'};
   var gl = {A: 'A級精品', B: 'B級流通', C: 'C級散貨'};
-  var html = (r.image_url ? '<div class="detail-photo"><img class="detail-img" src="' + r.image_url + '"><span class="uploader-badge detail-uploader">上傳者：' + escapeHtml(r.photo_uploaded_by || '未知') + '</span></div>' : '') +
+  var html = (r.image_url ? '<div class="detail-photo"><img class="detail-img" src="' + r.image_url + '" onclick="openRecordImage(\'' + r.id + '\')"><span class="uploader-badge detail-uploader">上傳者：' + escapeHtml(r.photo_uploaded_by || '未知') + '</span></div>' : '') +
     '<label class="upload-btn-label" style="margin-bottom:12px">&#128247; ' + (r.image_url ? '補上／更換封面' : '上傳封面') + '<input type="file" accept="image/*" style="display:none" onchange="replaceCover(this)"></label>' +
     '<div class="detail-card">' +
     '<div class="detail-artist">' + (r.artist || '未知藝人') + '</div>' +
