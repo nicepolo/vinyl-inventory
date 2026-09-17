@@ -129,20 +129,26 @@ def available_gemini_models():
     return list(dict.fromkeys(model for model in preferred if model))[:2]
 
 def gemini_generation_request(model, parts, generation_config, safety_settings=None):
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}"
     payload = {"contents": [{"parts": parts}], "generationConfig": generation_config}
     if safety_settings:
         payload["safetySettings"] = safety_settings
-    response = post_with_retry(url, json=payload)
-    # Some older models accept JSON mode but not schema/thinking options. Retry
-    # a lean compatible request before moving to a different model.
-    if response.status_code == 400 and ("responseSchema" in generation_config or "thinkingConfig" in generation_config):
-        compatible_config = dict(generation_config)
-        compatible_config.pop("responseSchema", None)
-        compatible_config.pop("thinkingConfig", None)
-        payload["generationConfig"] = compatible_config
+    last_response = None
+    for api_version in ("v1beta", "v1"):
+        url = f"https://generativelanguage.googleapis.com/{api_version}/models/{model}:generateContent?key={GEMINI_API_KEY}"
+        payload["generationConfig"] = generation_config
         response = post_with_retry(url, json=payload)
-    return response
+        # Some models accept JSON mode but not schema/thinking options. Retry a
+        # lean compatible request on the same API version before switching.
+        if response.status_code == 400 and ("responseSchema" in generation_config or "thinkingConfig" in generation_config):
+            compatible_config = dict(generation_config)
+            compatible_config.pop("responseSchema", None)
+            compatible_config.pop("thinkingConfig", None)
+            payload["generationConfig"] = compatible_config
+            response = post_with_retry(url, json=payload)
+        last_response = response
+        if response.status_code != 404:
+            return response
+    return last_response
 
 def recognize_with_gemini(image_data, media_type, prompt):
     last_error = None
