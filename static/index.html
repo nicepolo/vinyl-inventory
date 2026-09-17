@@ -137,7 +137,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 <div class="panel" id="add-panel">
   <div class="panel-header">
     <button class="back-btn" onclick="closeAdd()">← 返回</button>
-    <h2>新增唱片</h2>
+    <h2 id="add-title">新增唱片</h2>
     <div style="width:48px"></div>
   </div>
   <div class="form-body">
@@ -192,7 +192,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
   <div class="panel-header">
     <button class="back-btn" onclick="closeDetail()">← 返回</button>
     <h2>唱片詳情</h2>
-    <button class="danger-btn" onclick="deleteRecord()">刪除</button>
+    <div><button class="back-btn" style="color:#fff;margin-right:10px" onclick="editRecord()">編輯</button><button class="danger-btn" onclick="deleteRecord()">刪除</button></div>
   </div>
   <div class="detail-body" id="detail-body"></div>
 </div>
@@ -221,6 +221,7 @@ var currentGradeSelected = 'B';
 var uploadedImageUrl = '';
 var batchQueue = [];
 var batchProcessing = false;
+var editingRecordId = '';
 
 function escapeHtml(value) {
   return String(value == null ? '' : value).replace(/[&<>"']/g, function(ch) {
@@ -314,6 +315,9 @@ function showAdd() { resetForm(); document.getElementById('add-panel').classList
 function closeAdd() { document.getElementById('add-panel').classList.remove('open'); }
 
 function resetForm() {
+  editingRecordId = '';
+  document.getElementById('add-title').textContent = '新增唱片';
+  document.getElementById('save-btn').innerHTML = '&#128190; 儲存到庫存';
   ['artist','album','year','label','genre','value','condition','tracks','notes'].forEach(function(k) {
     var el = document.getElementById('f-' + k);
     if (el) el.value = '';
@@ -464,7 +468,7 @@ function saveRecord() {
   var album = document.getElementById('f-album').value;
   if (!artist && !album) { showToast('請至少填寫藝人或專輯名稱', 'error'); return; }
   document.getElementById('save-btn').disabled = true;
-  fetch('/api/records', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({
+  var payload = {
     artist: artist, album: album,
     year: document.getElementById('f-year').value,
     label: document.getElementById('f-label').value,
@@ -476,8 +480,12 @@ function saveRecord() {
     notes: document.getElementById('f-notes').value,
     estimated_value: document.getElementById('f-value').value,
     image_url: uploadedImageUrl
-  })})
-  .then(function() { fetchRecords(); showToast('已新增 ' + (artist || album)); closeAdd(); })
+  };
+  var url = editingRecordId ? ('/api/records/' + editingRecordId) : '/api/records';
+  var method = editingRecordId ? 'PUT' : 'POST';
+  fetch(url, {method: method, headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)})
+  .then(jsonOrError)
+  .then(function() { fetchRecords(); showToast(editingRecordId ? '資料已更新' : ('已新增 ' + (artist || album))); closeAdd(); })
   .catch(function() { showToast('儲存失敗', 'error'); })
   .then(function() { document.getElementById('save-btn').disabled = false; });
 }
@@ -514,6 +522,32 @@ function showDetail(id) {
   html += '<div style="text-align:center;color:#9CA3AF;font-size:12px;margin-top:8px">建立：' + (r.created_at || '').slice(0, 10) + '</div>';
   document.getElementById('detail-body').innerHTML = html;
   document.getElementById('detail-panel').classList.add('open');
+}
+
+function editRecord() {
+  if (!currentRecord) return;
+  var r = currentRecord;
+  editingRecordId = r.id;
+  uploadedImageUrl = r.image_url || '';
+  document.getElementById('add-title').textContent = '編輯唱片';
+  document.getElementById('save-btn').innerHTML = '&#128190; 儲存修改';
+  ['artist','album','year','label','genre','condition','tracks','notes'].forEach(function(k) {
+    document.getElementById('f-' + k).value = r[k] || '';
+  });
+  document.getElementById('f-value').value = r.estimated_value || '';
+  document.getElementById('f-format').value = r.format || 'LP (33轉)';
+  setGrade(r.grade || 'B');
+  var preview = document.getElementById('preview-img');
+  if (r.image_url) {
+    preview.src = r.image_url;
+    preview.style.display = 'block';
+    document.getElementById('photo-placeholder').style.display = 'none';
+  } else {
+    preview.style.display = 'none';
+    document.getElementById('photo-placeholder').style.display = 'block';
+  }
+  closeDetail();
+  document.getElementById('add-panel').classList.add('open');
 }
 
 function replaceCover(input) {

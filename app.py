@@ -1,4 +1,5 @@
 import os, json, uuid, base64, time, hmac, hashlib, re, io
+from difflib import SequenceMatcher
 from datetime import datetime
 from flask import Flask, request, jsonify, send_from_directory, Response, redirect
 from flask_cors import CORS
@@ -170,16 +171,38 @@ def clean_lens_title_for_music(title, source=""):
     text = re.sub(r"\s+", " ", text).strip(" -|–—")
     return text[:220]
 
+def normalized_match_text(value):
+    return re.sub(r"[^a-z0-9]+", " ", str(value or "").casefold()).strip()
+
+def translate_to_traditional_chinese(value):
+    value = str(value or "").strip()
+    if not value or re.search(r"[\u3400-\u9fff]", value):
+        return value
+    try:
+        response = requests.get(
+            "https://api.mymemory.translated.net/get",
+            params={"q": value[:450], "langpair": "en|zh-TW"}, timeout=8
+        )
+        if response.ok:
+            translated = str((response.json().get("responseData") or {}).get("translatedText") or "").strip()
+            if translated and translated.casefold() != value.casefold():
+                return translated
+    except (requests.RequestException, ValueError, TypeError):
+        pass
+    return ""
+
 def match_lens_with_musicbrainz(matches):
     headers = {"User-Agent": "WanHungVinylInventory/1.0 (catalogue identification)"}
-    for match in matches[:4]:
+    lens_queries = [clean_lens_title_for_music(item.get("title", ""), item.get("source", "")) for item in matches[:6]]
+    lens_queries = [query for query in lens_queries if query]
+    for match in matches[:3]:
         query = clean_lens_title_for_music(match.get("title", ""), match.get("source", ""))
         if not query:
             continue
         try:
             response = requests.get(
                 "https://musicbrainz.org/ws/2/release/",
-                params={"query": query, "fmt": "json", "limit": 5},
+                params={"query": query, "fmt": "json", "limit": 20},
                 headers=headers, timeout=10
             )
             if not response.ok:
@@ -187,9 +210,24 @@ def match_lens_with_musicbrainz(matches):
             releases = response.json().get("releases", [])
             if not releases:
                 continue
-            release = max(releases, key=lambda item: int(item.get("score", 0) or 0))
-            if int(release.get("score", 0) or 0) < 65:
+            def release_rank(item):
+                credits = item.get("artist-credit") or []
+                artist_text = " ".join(str(credit.get("name") or "") for credit in credits if isinstance(credit, dict))
+                candidate = normalized_match_text(artist_text + " " + str(item.get("title") or ""))
+                similarity = max((SequenceMatcher(None, candidate, normalized_match_text(text)).ratio() for text in lens_queries), default=0)
+                return similarity * 100 + int(item.get("score", 0) or 0) * 0.25
+            release = max(releases, key=release_rank)
+            if release_rank(release) < 60:
                 continue
+            release_id = str(release.get("id") or "")
+            if release_id:
+                detail_response = requests.get(
+                    f"https://musicbrainz.org/ws/2/release/{release_id}",
+                    params={"inc": "artist-credits+labels+recordings+release-groups+genres", "fmt": "json"},
+                    headers=headers, timeout=10
+                )
+                if detail_response.ok:
+                    release = detail_response.json()
             credits = release.get("artist-credit") or []
             artist = "".join(
                 str(credit.get("name") or credit.get("artist", {}).get("name") or "") + str(credit.get("joinphrase") or "")
@@ -203,12 +241,30 @@ def match_lens_with_musicbrainz(matches):
             date = str(release.get("date") or "")
             year_match = re.match(r"(19\d{2}|20\d{2})", date)
             group = release.get("release-group") or {}
+            genres = [str(item.get("name") or "") for item in (group.get("genres") or []) if item.get("name")]
             secondary = group.get("secondary-types") or []
-            genre = ", ".join(str(item) for item in secondary[:3])
+            genre = ", ".join((genres + [str(item) for item in secondary])[:3])
+            media = release.get("media") or []
+            tracks = []
+            formats = []
+            for medium in media:
+                medium_format = str(medium.get("format") or "").strip()
+                if medium_format and medium_format not in formats:
+                    formats.append(medium_format)
+                for track in medium.get("tracks") or []:
+                    track_title = str(track.get("title") or "").strip()
+                    if track_title:
+                        tracks.append(track_title)
+            artist_zh = translate_to_traditional_chinese(artist)
+            album_original = str(release.get("title") or "")[:200]
+            album_zh = translate_to_traditional_chinese(album_original)
+            combined_artist = f"{artist_zh} / {artist}" if artist_zh and artist_zh.casefold() != artist.casefold() else artist
+            combined_album = f"{album_zh} / {album_original}" if album_zh and album_zh.casefold() != album_original.casefold() else album_original
             return {
-                "artist": artist[:160], "album": str(release.get("title") or "")[:200],
+                "artist": combined_artist[:320], "album": combined_album[:400],
                 "year": year_match.group(1) if year_match else "", "label": ", ".join(labels[:2]),
-                "format": "LP (33轉)", "genre": genre, "tracks": "", "condition": "待人工確認",
+                "format": ", ".join(formats[:2]) or "LP (33轉)", "genre": genre,
+                "tracks": "\n".join(tracks[:40]), "condition": "待人工確認",
                 "suggested_grade": "B", "estimated_value": "",
                 "notes": "Google Lens 與 MusicBrainz 已交叉核對；版本與品相請人工確認。",
                 "low_confidence": ["format", "genre", "tracks", "condition", "suggested_grade"],
