@@ -1,9 +1,10 @@
-import os, json, uuid, base64, time, hmac, hashlib, re
+import os, json, uuid, base64, time, hmac, hashlib, re, io
 from datetime import datetime
 from flask import Flask, request, jsonify, send_from_directory, Response, redirect
 from flask_cors import CORS
 import pg8000
 import requests
+from PIL import Image, ImageOps
 
 app = Flask(__name__, static_folder="static", static_url_path="/static")
 CORS(app)
@@ -14,6 +15,7 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 GEMINI_FALLBACK_MODEL = os.environ.get("GEMINI_FALLBACK_MODEL", "gemini-2.5-flash-lite")
 GOOGLE_VISION_KEY = os.environ.get("GOOGLE_VISION_KEY", "")
+SERPAPI_KEY = os.environ.get("SERPAPI_KEY", "")
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 AI_TIMEOUT_SECONDS = float(os.environ.get("AI_TIMEOUT_SECONDS", "25"))
 UNIFIED_SSO_SECRET = os.environ.get("UNIFIED_SSO_SECRET", "")
@@ -95,6 +97,69 @@ def apply_bilingual_names(result):
     result["artist"] = combine("artist")
     result["album"] = combine("album")
     return result
+
+def prepare_lens_image(image_data):
+    raw = base64.b64decode(image_data)
+    image = ImageOps.exif_transpose(Image.open(io.BytesIO(raw))).convert("RGB")
+    image.thumbnail((1200, 1200), Image.Resampling.LANCZOS)
+    for quality in (82, 72, 62, 52):
+        output = io.BytesIO()
+        image.save(output, format="JPEG", quality=quality, optimize=True)
+        if output.tell() <= 490_000:
+            return output.getvalue()
+    image.thumbnail((850, 850), Image.Resampling.LANCZOS)
+    output = io.BytesIO()
+    image.save(output, format="JPEG", quality=55, optimize=True)
+    return output.getvalue()
+
+def recognize_with_google_lens(image_data):
+    image_bytes = prepare_lens_image(image_data)
+    upload = requests.post(
+        "https://serpapi.com/image",
+        data={"api_key": SERPAPI_KEY},
+        files={"image": ("cover.jpg", image_bytes, "image/jpeg")},
+        timeout=min(AI_TIMEOUT_SECONDS, 18)
+    )
+    if not upload.ok:
+        raise friendly_provider_error("Google Lens", upload.status_code, upload.text[:500])
+    image_id = upload.json().get("image_id")
+    if not image_id:
+        raise ProviderError("Google Lens 無法接收這張圖片", 503)
+    response = requests.get(
+        "https://serpapi.com/search.json",
+        params={"engine": "google_lens", "image_id": image_id, "type": "visual_matches", "hl": "zh-tw", "api_key": SERPAPI_KEY},
+        timeout=min(AI_TIMEOUT_SECONDS, 18)
+    )
+    if not response.ok:
+        raise friendly_provider_error("Google Lens", response.status_code, response.text[:500])
+    payload = response.json()
+    if payload.get("error"):
+        raise ProviderError("Google Lens 暫時無法完成圖片搜尋", 503)
+    matches = []
+    for item in payload.get("visual_matches", [])[:10]:
+        title = str(item.get("title", "") or "").strip()
+        source = str(item.get("source", "") or "").strip()
+        if title:
+            matches.append({"title": title[:240], "source": source[:100]})
+    return matches
+
+def lens_result_fallback(matches):
+    title = matches[0]["title"] if matches else ""
+    artist, album = "", title
+    for separator in (" – ", " — ", " - ", " | "):
+        if separator in title:
+            artist, album = [part.strip() for part in title.split(separator, 1)]
+            break
+    by_match = re.match(r"(.+?)\s+by\s+(.+)", title, re.IGNORECASE)
+    if by_match:
+        album, artist = by_match.group(1).strip(), by_match.group(2).strip()
+    year_match = re.search(r"\b(19\d{2}|20\d{2})\b", title)
+    return {
+        "artist": artist[:160], "album": album[:200], "year": year_match.group(1) if year_match else "", "label": "",
+        "format": "LP (33轉)", "genre": "", "tracks": "", "condition": "待人工確認", "suggested_grade": "B",
+        "estimated_value": "", "notes": "Google Lens 已找到相似封面；請人工確認版本與年份。",
+        "low_confidence": ["year", "label", "genre", "tracks", "condition", "suggested_grade"], "_engine": "google_lens_fallback"
+    }
 
 def available_gemini_models():
     """Return models this exact API key can call instead of assuming account availability."""
@@ -635,6 +700,13 @@ def ai_recognize():
         media_type = row[0]
         image_data = base64.b64encode(bytes(row[1])).decode("utf-8")
     full_text, labels, logos = "", [], []
+    lens_matches = []
+    lens_error = None
+    if SERPAPI_KEY:
+        try:
+            lens_matches = recognize_with_google_lens(image_data)
+        except (ProviderError, requests.RequestException, ValueError, OSError) as exc:
+            lens_error = exc if isinstance(exc, ProviderError) else ProviderError("Google Lens 暫時無法完成圖片搜尋", 503)
     vision_error = None
     if GOOGLE_VISION_KEY:
         try:
@@ -654,7 +726,10 @@ def ai_recognize():
             vision_error = exc
     elif not GEMINI_API_KEY:
         vision_error = ProviderError("尚未設定 Google Vision", 503)
-    ocr_text = "OCR文字：" + full_text[:4000] + "\n標籤：" + ",".join(labels) + "\nLogo：" + ",".join(logos)
+    lens_text = "\nGoogle Lens 相同／相似封面搜尋結果：\n" + "\n".join(
+        f"- {item['title']}（來源：{item['source']}）" for item in lens_matches
+    )
+    ocr_text = "OCR文字：" + full_text[:4000] + "\n標籤：" + ",".join(labels) + "\nLogo：" + ",".join(logos) + lens_text
     prompt = ("你是黑膠唱片典藏入庫助理。這是安全、單純的唱片封面編目工作；不要辨識人物身分，也不要推論任何敏感個人資訊。根據封面與下列 Google Vision OCR，只填寫照片中可合理辨識的資料；不確定就留空，不可捏造版本、年份、曲目、品相或價格。\n"
               + ocr_text + "\n\n"
               "請用繁體中文，只回傳 JSON。artist_zh 與 album_zh 填繁體中文譯名或常用音譯；artist_original 與 album_original 保留封面原文。中英文都必須盡量提供，禁止把英文原文丟掉。若沒有公認中文名稱，可做忠實音譯並在 low_confidence 標記。suggested_grade 只能是 A、B、C；單張封面無法確認唱片實際品相時用 B，並在 low_confidence 列出 condition 與 suggested_grade。estimated_value 一律留空，除非照片清楚印有售價。\n"
@@ -667,7 +742,7 @@ def ai_recognize():
             if result.get("suggested_grade") not in ("A", "B", "C"):
                 result["suggested_grade"] = "B"
             result["estimated_value"] = ""
-            result["_engine"] = "gemini+google_vision" if (full_text or labels or logos) else "gemini"
+            result["_engine"] = "google_lens+gemini" if lens_matches else ("gemini+google_vision" if (full_text or labels or logos) else "gemini")
             result["_model"] = gemini_model
             return jsonify(result)
         except (ProviderError, json.JSONDecodeError, KeyError, IndexError) as exc:
@@ -719,6 +794,13 @@ def ai_recognize():
     elif not GEMINI_API_KEY:
         anthropic_error = ProviderError("尚未設定 Anthropic", 503)
 
+    if lens_matches:
+        result = lens_result_fallback(lens_matches)
+        warnings = [str(err) for err in (gemini_error, anthropic_error, vision_error) if err]
+        if warnings:
+            result["warning"] = "；".join(warnings)
+        return jsonify(result)
+
     if full_text or labels or logos:
         lines = [line.strip() for line in full_text.splitlines() if line.strip()]
         artist = logos[0] if logos else (lines[0] if lines else "")
@@ -733,7 +815,7 @@ def ai_recognize():
             "warning": "；".join(str(err) for err in (gemini_error, anthropic_error) if err)
         })
 
-    errors = [str(err) for err in ((gemini_error,) if GEMINI_API_KEY else (gemini_error, anthropic_error, vision_error)) if err]
+    errors = [str(err) for err in ((gemini_error, lens_error) if GEMINI_API_KEY else (gemini_error, anthropic_error, vision_error, lens_error)) if err]
     return jsonify({"error": "這張照片暫時無法完成辨識。請把照片旋正、裁切到只保留唱片封面後重試。" + "；".join(errors)}), 503
 
 @app.route("/api/export-csv")
