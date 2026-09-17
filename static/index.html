@@ -361,7 +361,11 @@ function handleFileChange(input) {
     .then(jsonOrError)
     .then(function(info) {
       fillForm(info);
-      showAiBar('done', info.warning ? ('備援辨識完成：' + info.warning + '，請人工確認') : 'AI辨識完成，請確認並補充資料');
+      if (info._engine && info._engine.indexOf('google_lens') !== -1) {
+        showAiBar('done', 'Google Lens 辨識完成，請確認版本、年份與品相');
+      } else {
+        showAiBar('done', info.warning ? ('備援辨識完成：' + info.warning + '，請人工確認') : 'AI辨識完成，請確認並補充資料');
+      }
     })
     .catch(function(err) { showAiBar('error', err.message || '辨識失敗，請手動輸入'); });
 }

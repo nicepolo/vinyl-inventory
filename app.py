@@ -161,6 +161,63 @@ def lens_result_fallback(matches):
         "low_confidence": ["year", "label", "genre", "tracks", "condition", "suggested_grade"], "_engine": "google_lens_fallback"
     }
 
+def clean_lens_title_for_music(title, source=""):
+    text = re.sub(r"\s+", " ", str(title or "")).strip()
+    if source:
+        text = re.sub(rf"\s*[-|–—]\s*{re.escape(source)}\s*$", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\b(LP|VINYL|RECORD|ALBUM|33\s*RPM|MONO|STEREO|NEW|USED|RARE|ORIGINAL)\b", " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"(?:US|NT|HK)?\$\s*[\d,.]+", " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s+", " ", text).strip(" -|–—")
+    return text[:220]
+
+def match_lens_with_musicbrainz(matches):
+    headers = {"User-Agent": "WanHungVinylInventory/1.0 (catalogue identification)"}
+    for match in matches[:4]:
+        query = clean_lens_title_for_music(match.get("title", ""), match.get("source", ""))
+        if not query:
+            continue
+        try:
+            response = requests.get(
+                "https://musicbrainz.org/ws/2/release/",
+                params={"query": query, "fmt": "json", "limit": 5},
+                headers=headers, timeout=10
+            )
+            if not response.ok:
+                continue
+            releases = response.json().get("releases", [])
+            if not releases:
+                continue
+            release = max(releases, key=lambda item: int(item.get("score", 0) or 0))
+            if int(release.get("score", 0) or 0) < 65:
+                continue
+            credits = release.get("artist-credit") or []
+            artist = "".join(
+                str(credit.get("name") or credit.get("artist", {}).get("name") or "") + str(credit.get("joinphrase") or "")
+                for credit in credits if isinstance(credit, dict)
+            ).strip()
+            labels = []
+            for label_info in release.get("label-info") or []:
+                name = str((label_info.get("label") or {}).get("name") or "").strip()
+                if name and name not in labels:
+                    labels.append(name)
+            date = str(release.get("date") or "")
+            year_match = re.match(r"(19\d{2}|20\d{2})", date)
+            group = release.get("release-group") or {}
+            secondary = group.get("secondary-types") or []
+            genre = ", ".join(str(item) for item in secondary[:3])
+            return {
+                "artist": artist[:160], "album": str(release.get("title") or "")[:200],
+                "year": year_match.group(1) if year_match else "", "label": ", ".join(labels[:2]),
+                "format": "LP (33轉)", "genre": genre, "tracks": "", "condition": "待人工確認",
+                "suggested_grade": "B", "estimated_value": "",
+                "notes": "Google Lens 與 MusicBrainz 已交叉核對；版本與品相請人工確認。",
+                "low_confidence": ["format", "genre", "tracks", "condition", "suggested_grade"],
+                "_engine": "google_lens+musicbrainz"
+            }
+        except (requests.RequestException, ValueError, TypeError):
+            continue
+    return lens_result_fallback(matches)
+
 def available_gemini_models():
     """Return models this exact API key can call instead of assuming account availability."""
     discovered = []
@@ -729,6 +786,8 @@ def ai_recognize():
     lens_text = "\nGoogle Lens 相同／相似封面搜尋結果：\n" + "\n".join(
         f"- {item['title']}（來源：{item['source']}）" for item in lens_matches
     )
+    if lens_matches:
+        return jsonify(match_lens_with_musicbrainz(lens_matches))
     ocr_text = "OCR文字：" + full_text[:4000] + "\n標籤：" + ",".join(labels) + "\nLogo：" + ",".join(logos) + lens_text
     prompt = ("你是黑膠唱片典藏入庫助理。這是安全、單純的唱片封面編目工作；不要辨識人物身分，也不要推論任何敏感個人資訊。根據封面與下列 Google Vision OCR，只填寫照片中可合理辨識的資料；不確定就留空，不可捏造版本、年份、曲目、品相或價格。\n"
               + ocr_text + "\n\n"
